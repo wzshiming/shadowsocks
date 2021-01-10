@@ -8,6 +8,8 @@ ShadowSocks server and client
 [![GitHub license](https://img.shields.io/github/license/wzshiming/shadowsocks.svg)](https://github.com/wzshiming/shadowsocks/blob/master/LICENSE)
 [![gocover.io](https://gocover.io/_badge/github.com/wzshiming/shadowsocks)](https://gocover.io/github.com/wzshiming/shadowsocks)
 
+This project is to add protocol support for the [Bridge](https://github.com/wzshiming/bridge), or it can be used alone
+
 The following is the implementation of other proxy protocols
 
 - [Socks4](https://github.com/wzshiming/socks4)
@@ -20,8 +22,32 @@ The following is the implementation of other proxy protocols
 
 [Example](https://github.com/wzshiming/shadowsocks/blob/master/cmd/shadowsocks/main.go)
 
+
+## Features
+
 - [x] Support TCP proxy
 - [ ] Support UDP proxy
+
+## Encrypto method
+
+- AEAD
+  - [x] aes-128-gcm
+  - [x] aes-256-gcm
+  - [x] chacha20-ietf-poly1305
+- Stream
+  - [x] aes-128-cfb
+  - [x] aes-192-cfb
+  - [x] aes-256-cfb
+  - [x] aes-128-ctr
+  - [x] aes-192-ctr
+  - [x] aes-256-ctr
+  - [x] des-cfb
+  - [x] bf-cfb
+  - [x] cast5-cfb
+  - [x] rc4-md5
+  - [x] chacha20
+  - [x] chacha20-ietf
+  - [x] salsa20
 
 ## License
 

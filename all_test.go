@@ -6,7 +6,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
-	"time"
 
 	"github.com/wzshiming/shadowsocks"
 	_ "github.com/wzshiming/shadowsocks/init"
@@ -33,33 +32,26 @@ var list = []string{
 }
 
 func TestAll(t *testing.T) {
-	svc := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+	svc := httptest.NewTLSServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		writer.WriteHeader(200)
 	}))
 
 	pwd := "password"
 	for _, c := range list {
 		t.Run(c, func(t *testing.T) {
-			s := shadowsocks.NewServer()
-			cipher, err := shadowsocks.NewCipher(c, pwd)
+			s, err := shadowsocks.NewSimpleServer("ss://" + c + ":" + pwd + "@:0")
 			if err != nil {
 				t.Fatal(err)
 			}
-			s.ConnCipher = cipher
 
-			listener, err := net.Listen("tcp", ":0")
-			if err != nil {
-				t.Fatal(err)
-			}
-			go s.Serve(listener)
-			defer listener.Close()
-			time.Sleep(time.Second / 2)
+			s.Start(context.Background())
+			defer s.Close()
 
-			d, err := shadowsocks.NewDialer("ss://" + c + ":" + pwd + "@" + listener.Addr().String())
+			d, err := shadowsocks.NewDialer(s.ProxyURL())
 			if err != nil {
 				t.Fatal(err)
 			}
-			transport := http.DefaultTransport.(*http.Transport).Clone()
+			transport := svc.Client().Transport.(*http.Transport).Clone()
 			transport.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
 				t.Log(c)
 				return d.DialContext(ctx, network, addr)
