@@ -12,6 +12,8 @@ import (
 	"golang.org/x/crypto/hkdf"
 )
 
+var _zerononce [128]byte // read-only. 128 bytes is more than enough.
+
 func RegisterCipher(method string, keyLen int, cipher func(key []byte) (cipher.AEAD, error)) {
 	shadowsocks.RegisterCipher(method, func(password string) (shadowsocks.ConnCipher, error) {
 		return &Cipher{Rand: rand.Reader, Key: shadowsocks.KDF(password, keyLen), NewAEAD: cipher}, nil
@@ -46,13 +48,13 @@ func (c *Cipher) SaltSize() int {
 
 var sssubkey = []byte("ss-subkey")
 
-func (c *Cipher) Encrypt(salt []byte) (cipher.AEAD, error) {
+func (c *Cipher) newEncrypt(salt []byte) (cipher.AEAD, error) {
 	subkey := make([]byte, c.KeySize())
 	hkdfSHA1(c.Key, salt, sssubkey, subkey)
 	return c.NewAEAD(subkey)
 }
 
-func (c *Cipher) Decrypt(salt []byte) (cipher.AEAD, error) {
+func (c *Cipher) newDecrypt(salt []byte) (cipher.AEAD, error) {
 	subkey := make([]byte, c.KeySize())
 	hkdfSHA1(c.Key, salt, sssubkey, subkey)
 	return c.NewAEAD(subkey)
@@ -64,7 +66,7 @@ func (c *Cipher) initReader(r io.Reader) (*cipherReader, error) {
 	if err != nil {
 		return nil, err
 	}
-	aead, err := c.Decrypt(salt)
+	aead, err := c.newDecrypt(salt)
 	if err != nil {
 		return nil, err
 	}
@@ -77,7 +79,7 @@ func (c *Cipher) initWriter(w io.Writer) (*cipherWriter, error) {
 	if err != nil {
 		return nil, err
 	}
-	aead, err := c.Encrypt(salt)
+	aead, err := c.newEncrypt(salt)
 	if err != nil {
 		return nil, err
 	}
@@ -86,6 +88,42 @@ func (c *Cipher) initWriter(w io.Writer) (*cipherWriter, error) {
 		return nil, err
 	}
 	return newCipherWriter(w, aead), nil
+}
+
+func (c *Cipher) Encrypt(dest, src []byte) (int, error) {
+	saltSize := c.SaltSize()
+	salt := dest[:saltSize]
+	_, err := io.ReadFull(c.Rand, salt)
+	if err != nil {
+		return 0, err
+	}
+	aead, err := c.newEncrypt(salt)
+	if err != nil {
+		return 0, err
+	}
+	if len(dest) < saltSize+len(src)+aead.Overhead() {
+		return 0, io.ErrShortBuffer
+	}
+	b := aead.Seal(dest[saltSize:saltSize], _zerononce[:aead.NonceSize()], src, nil)
+	return saltSize + len(b), nil
+}
+
+func (c *Cipher) Decrypt(dest, src []byte) (int, error) {
+	saltSize := c.SaltSize()
+	if len(src) < saltSize {
+		return 0, io.ErrShortBuffer
+	}
+	salt := src[:saltSize]
+	aead, err := c.newDecrypt(salt)
+	if err != nil {
+		return 0, err
+	}
+	head := len(src) - (saltSize + aead.Overhead())
+	if head < 0 || head >= len(dest) {
+		return 0, io.ErrShortBuffer
+	}
+	b, err := aead.Open(dest[:0], _zerononce[:aead.NonceSize()], src[saltSize:], nil)
+	return len(b), err
 }
 
 // payloadSizeMask is the maximum size of payload in bytes.

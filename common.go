@@ -82,3 +82,16 @@ type BytesPool interface {
 	Get() []byte
 	Put([]byte)
 }
+
+func getBytes(p BytesPool) []byte {
+	if p != nil {
+		return p.Get()
+	}
+	return make([]byte, 32*1024)
+}
+
+func putBytes(p BytesPool, d []byte) {
+	if p != nil {
+		p.Put(d)
+	}
+}

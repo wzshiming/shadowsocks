@@ -15,6 +15,8 @@ var (
 
 type ConnCipher interface {
 	StreamConn(net.Conn) net.Conn
+	Decrypt(dist, src []byte) (n int, err error)
+	Encrypt(dist, src []byte) (n int, err error)
 }
 
 var registerCipher = map[string]func(password string) (ConnCipher, error){}

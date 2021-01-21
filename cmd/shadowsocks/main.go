@@ -24,14 +24,31 @@ func init() {
 
 func main() {
 	logger := log.New(os.Stderr, "[shadowsocks] ", log.LstdFlags)
-	svc := &shadowsocks.Server{
-		Logger:   logger,
-		Cipher:   cipher,
-		Password: password,
-	}
+	go func() {
+		svc := &shadowsocks.Server{
+			Logger:   logger,
+			Cipher:   cipher,
+			Password: password,
+		}
 
-	err := svc.ListenAndServe("tcp", address)
-	if err != nil {
-		logger.Println(err)
-	}
+		err := svc.ListenAndServe("tcp", address)
+		if err != nil {
+			logger.Println(err)
+		}
+		os.Exit(1 )
+	}()
+	go func() {
+		svc := &shadowsocks.PacketServer{
+			Logger:   logger,
+			Cipher:   cipher,
+			Password: password,
+		}
+
+		err := svc.ListenAndServe("udp", address)
+		if err != nil {
+			logger.Println(err)
+		}
+		os.Exit(1 )
+	}()
+	<-make(chan struct{})
 }

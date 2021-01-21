@@ -26,7 +26,7 @@ The following is the implementation of other proxy protocols
 ## Features
 
 - [x] Support TCP proxy
-- [ ] Support UDP proxy
+- [x] Support UDP proxy
 
 ## Encrypto method
 

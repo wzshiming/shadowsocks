@@ -29,6 +29,10 @@ type Cipher struct {
 	NewEncrypt func(key, iv []byte) (cipher.Stream, error)
 }
 
+func (c *Cipher) StreamConn(conn net.Conn) net.Conn {
+	return &cipherConn{Conn: conn, cipher: c}
+}
+
 func (c *Cipher) initEncrypt(w io.Writer) (cipher.Stream, error) {
 	iv := make([]byte, c.IvLen)
 	_, err := io.ReadFull(c.Rand, iv)
@@ -51,11 +55,33 @@ func (c *Cipher) initDecrypt(r io.Reader) (cipher.Stream, error) {
 	return c.NewDecrypt(c.Key, iv)
 }
 
-func (c *Cipher) StreamConn(conn net.Conn) net.Conn {
-	return &cipherConn{
-		Conn:   conn,
-		cipher: c,
+func (c *Cipher) Encrypt(dest, src []byte) (int, error) {
+	if len(dest) <= c.IvLen {
+		return 0, io.ErrShortBuffer
 	}
+	iv := dest[:c.IvLen]
+	_, err := io.ReadFull(c.Rand, iv)
+	if err != nil {
+		return 0, err
+	}
+	enc, err := c.NewEncrypt(c.Key, iv)
+	if err != nil {
+		return 0, err
+	}
+	enc.XORKeyStream(dest[c.IvLen:], src)
+	return len(src) + c.IvLen, nil
+}
+
+func (c *Cipher) Decrypt(dest, src []byte) (int, error) {
+	if len(src) <= c.IvLen {
+		return 0, io.ErrShortBuffer
+	}
+	dec, err := c.NewDecrypt(c.Key, src[:c.IvLen])
+	if err != nil {
+		return 0, err
+	}
+	dec.XORKeyStream(dest, src[c.IvLen:])
+	return len(src) - c.IvLen, nil
 }
 
 type cipherConn struct {

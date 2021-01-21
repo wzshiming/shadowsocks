@@ -2,6 +2,7 @@ package shadowsocks_test
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -12,6 +13,7 @@ import (
 )
 
 var list = []string{
+	"dummy",
 	"aes-128-cfb",
 	"aes-128-ctr",
 	"aes-128-gcm",
@@ -76,5 +78,89 @@ func TestAll(t *testing.T) {
 			}
 			resp.Body.Close()
 		})
+	}
+}
+
+func TestEncryptor(t *testing.T) {
+	var tmp1 [255]byte
+	var tmp2 [255]byte
+	for _, c := range list {
+		t.Run(c, func(t *testing.T) {
+			cipher, err := shadowsocks.NewCipher(c, "pwd")
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			n1, err := cipher.Encrypt(tmp1[:], []byte(c))
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			n2, err := cipher.Decrypt(tmp2[:], tmp1[:n1])
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(tmp2[:n2]) != c {
+				t.Errorf("%q %q %q", c, tmp1[:n1], tmp2[:n2])
+			}
+		})
+	}
+}
+
+func TestPacket(t *testing.T) {
+	// echo server
+	p, err := net.ListenPacket("udp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	go func() {
+		var buf [1024 * 32]byte
+		for {
+			i, addr, err := p.ReadFrom(buf[:])
+			if err != nil {
+				t.Fatal(err)
+			}
+			tmp := append([]byte("echo "), buf[:i]...)
+			_, err = p.WriteTo(tmp, addr)
+			if err != nil {
+				t.Fatal(err)
+			}
+		}
+	}()
+
+	remote, err := shadowsocks.NewSimplePacketServer("ss://aes-128-cfb:xx@127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = remote.Start(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	t.Log(remote.ProxyURL())
+	local, err := shadowsocks.NewPacketClient(remote.ProxyURL())
+	if err != nil {
+		t.Fatal(err)
+	}
+	client, err := local.ListenPacket(context.Background(), "udp", ":0")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for i := 0; i != 10; i++ {
+		tmp := fmt.Sprintf("hello %d", i)
+		_, err = client.WriteTo([]byte(tmp), p.LocalAddr())
+		if err != nil {
+			t.Fatal(err)
+		}
+		var buf [1024 * 32]byte
+		i, addr, err := client.ReadFrom(buf[:])
+		if err != nil {
+			t.Fatal(err)
+		}
+		if "echo "+tmp != string(buf[:i]) {
+			t.Error("resp", i, string(buf[:i]), addr)
+		}
 	}
 }
