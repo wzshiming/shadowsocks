@@ -35,7 +35,7 @@ func main() {
 		if err != nil {
 			logger.Println(err)
 		}
-		os.Exit(1 )
+		os.Exit(1)
 	}()
 	go func() {
 		svc := &shadowsocks.PacketServer{
@@ -48,7 +48,7 @@ func main() {
 		if err != nil {
 			logger.Println(err)
 		}
-		os.Exit(1 )
+		os.Exit(1)
 	}()
 	<-make(chan struct{})
 }
