@@ -36,8 +36,10 @@ func NewSimpleServer(addr string) (*SimpleServer, error) {
 	}
 
 	if u.User != nil {
-		s.Cipher = u.User.Username()
-		s.Password, _ = u.User.Password()
+		s.Cipher, s.Password, err = GetCipherAndPasswordFromUserinfo(u.User)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	cipher, err := NewCipher(s.Cipher, s.Password)

@@ -56,8 +56,10 @@ func NewDialer(addr string) (*Dialer, error) {
 		host = net.JoinHostPort(hostname, port)
 	}
 	if u.User != nil {
-		d.Cipher = u.User.Username()
-		d.Password, _ = u.User.Password()
+		d.Cipher, d.Password, err = GetCipherAndPasswordFromUserinfo(u.User)
+		if err != nil {
+			return nil, err
+		}
 	}
 	d.ProxyAddress = host
 	cipher, err := NewCipher(d.Cipher, d.Password)

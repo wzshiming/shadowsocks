@@ -2,8 +2,11 @@ package shadowsocks
 
 import (
 	"context"
+	"encoding/base64"
+	"fmt"
 	"io"
 	"net"
+	"net/url"
 	"os"
 	"reflect"
 	"runtime"
@@ -94,4 +97,28 @@ func putBytes(p BytesPool, d []byte) {
 	if p != nil {
 		p.Put(d)
 	}
+}
+
+func decodeCipherAndPasswordFromBase64(str string) (cipher, password string, err error) {
+	data, err := base64.StdEncoding.DecodeString(str)
+	if err != nil {
+		return "", "", fmt.Errorf("can't support %q", str)
+	}
+	cp := strings.SplitN(string(data), ":", 2)
+	if len(cp) != 2 {
+		return cp[0], "", nil
+	}
+	return cp[0], cp[1], nil
+}
+
+func GetCipherAndPasswordFromUserinfo(user *url.Userinfo) (cipher, password string, err error) {
+	cipher = user.Username()
+	password, ok := user.Password()
+	if !ok && !IsCipher(cipher) {
+		cipher, password, err = decodeCipherAndPasswordFromBase64(cipher)
+		if err != nil {
+			return "", "", err
+		}
+	}
+	return cipher, password, nil
 }

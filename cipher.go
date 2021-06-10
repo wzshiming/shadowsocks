@@ -2,15 +2,10 @@ package shadowsocks
 
 import (
 	"crypto/md5"
-	"errors"
 	"fmt"
 	"net"
 	"sort"
 	"strings"
-)
-
-var (
-	errEmptyPassword = errors.New("empty key")
 )
 
 type ConnCipher interface {
@@ -34,11 +29,13 @@ func CipherList() []string {
 	return list
 }
 
+func IsCipher(method string) bool {
+	_, ok := registerCipher[method]
+	return ok
+}
+
 // NewCipher creates a cipher that can be used in Dial()
 func NewCipher(method, password string) (c ConnCipher, err error) {
-	if password == "" {
-		return nil, errEmptyPassword
-	}
 	method = strings.ToLower(method)
 	gen, ok := registerCipher[method]
 	if ok {

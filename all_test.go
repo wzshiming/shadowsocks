@@ -31,6 +31,27 @@ var list = []string{
 	"rc4-md5",
 	"rc4-md5-6",
 	"salsa20",
+
+	"dummy:123",
+	"aes-128-cfb:123",
+	"aes-128-ctr:123",
+	"aes-128-gcm:123",
+	"aes-192-cfb:123",
+	"aes-192-ctr:123",
+	"aes-256-cfb:123",
+	"aes-256-ctr:123",
+	"aes-256-gcm:123",
+	"bf-cfb:123",
+	"cast5-cfb:123",
+	"chacha20:123",
+	"chacha20-ietf:123",
+	"chacha20-ietf-poly1305:123",
+	"des-cfb:123",
+	"rc4-md5:123",
+	"rc4-md5-6:123",
+	"salsa20:123",
+
+	"YWVzLTEyOC1jZmI6MTIzNDU2Cg==",
 }
 
 func TestAll(t *testing.T) {
@@ -38,10 +59,9 @@ func TestAll(t *testing.T) {
 		writer.WriteHeader(200)
 	}))
 
-	pwd := "password"
 	for _, c := range list {
 		t.Run(c, func(t *testing.T) {
-			s, err := shadowsocks.NewSimpleServer("ss://" + c + ":" + pwd + "@:0")
+			s, err := shadowsocks.NewSimpleServer("ss://" + c + "@:0")
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -84,8 +104,10 @@ func TestAll(t *testing.T) {
 func TestEncryptor(t *testing.T) {
 	var tmp1 [255]byte
 	var tmp2 [255]byte
-	for _, c := range list {
+
+	for _, c := range shadowsocks.CipherList() {
 		t.Run(c, func(t *testing.T) {
+
 			cipher, err := shadowsocks.NewCipher(c, "pwd")
 			if err != nil {
 				t.Fatal(err)
@@ -128,7 +150,7 @@ func TestPacket(t *testing.T) {
 		}
 	}()
 
-	remote, err := shadowsocks.NewSimplePacketServer("ss://aes-128-cfb:xx@127.0.0.1:0")
+	remote, err := shadowsocks.NewSimplePacketServer("ss://YWVzLTEyOC1jZmI6MTIzNDU2Cg==@127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
