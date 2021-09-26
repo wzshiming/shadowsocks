@@ -3,7 +3,6 @@ package shadowsocks
 import (
 	"context"
 	"fmt"
-	"log"
 	"net"
 	"strings"
 	"sync"
@@ -34,7 +33,7 @@ type PacketServer struct {
 	// a connect to complete. The default is no timeout
 	Timeout time.Duration
 	// Logger error log
-	Logger *log.Logger
+	Logger Logger
 	// BytesPool getting and returning temporary bytes
 	BytesPool BytesPool
 

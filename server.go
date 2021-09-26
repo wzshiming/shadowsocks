@@ -2,7 +2,6 @@ package shadowsocks
 
 import (
 	"context"
-	"log"
 	"net"
 )
 
@@ -12,7 +11,7 @@ type Server struct {
 	// establishing the transport connection.
 	ProxyDial func(context.Context, string, string) (net.Conn, error)
 	// Logger error log
-	Logger *log.Logger
+	Logger Logger
 	// Context is default context
 	Context context.Context
 	// Cipher use cipher protocol

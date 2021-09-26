@@ -122,3 +122,7 @@ func GetCipherAndPasswordFromUserinfo(user *url.Userinfo) (cipher, password stri
 	}
 	return cipher, password, nil
 }
+
+type Logger interface {
+	Println(v ...interface{})
+}
