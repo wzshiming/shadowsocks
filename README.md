@@ -16,6 +16,7 @@ The following is the implementation of other proxy protocols
 - [Socks5](https://github.com/wzshiming/socks5)
 - [HTTP Proxy](https://github.com/wzshiming/httpproxy)
 - [SSH Proxy](https://github.com/wzshiming/sshproxy)
+- [Any Proxy](https://github.com/wzshiming/anyproxy)
 
 ## Usage
 
