@@ -58,25 +58,29 @@ func NewSimplePacketServer(addr string) (*SimplePacketServer, error) {
 // Run the PacketServer
 func (s *SimplePacketServer) Run(ctx context.Context) error {
 	var listenConfig net.ListenConfig
-	packetConn, err := listenConfig.ListenPacket(ctx, s.Network, s.Address)
-	if err != nil {
-		return err
+	if s.PacketConn == nil {
+		packetConn, err := listenConfig.ListenPacket(ctx, s.Network, s.Address)
+		if err != nil {
+			return err
+		}
+		s.PacketConn = packetConn
 	}
-	s.PacketConn = packetConn
-	s.Address = packetConn.LocalAddr().String()
-	return s.ServePacket(packetConn)
+	s.Address = s.PacketConn.LocalAddr().String()
+	return s.ServePacket(s.PacketConn)
 }
 
 // Start the PacketServer
 func (s *SimplePacketServer) Start(ctx context.Context) error {
 	var listenConfig net.ListenConfig
-	packetConn, err := listenConfig.ListenPacket(ctx, s.Network, s.Address)
-	if err != nil {
-		return err
+	if s.PacketConn == nil {
+		packetConn, err := listenConfig.ListenPacket(ctx, s.Network, s.Address)
+		if err != nil {
+			return err
+		}
+		s.PacketConn = packetConn
 	}
-	s.PacketConn = packetConn
-	s.Address = packetConn.LocalAddr().String()
-	go s.ServePacket(packetConn)
+	s.Address = s.PacketConn.LocalAddr().String()
+	go s.ServePacket(s.PacketConn)
 	return nil
 }
 
