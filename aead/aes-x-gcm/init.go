@@ -9,6 +9,7 @@ import (
 
 func init() {
 	aead.RegisterCipher("aes-128-gcm", 16, NewAESGCM)
+	aead.RegisterCipher("aes-192-gcm", 24, NewAESGCM)
 	aead.RegisterCipher("aes-256-gcm", 32, NewAESGCM)
 }
 

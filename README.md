@@ -30,12 +30,14 @@ The following is the implementation of other proxy protocols
 - [x] Support TCP proxy
 - [x] Support UDP proxy
 
-## Encrypto method
+## Supported ciphers
 
 - AEAD
   - [x] aes-128-gcm
+  - [x] aes-192-gcm
   - [x] aes-256-gcm
   - [x] chacha20-ietf-poly1305
+  - [x] xchacha20-poly1305
 - Stream
   - [x] aes-128-cfb
   - [x] aes-192-cfb
@@ -49,6 +51,7 @@ The following is the implementation of other proxy protocols
   - [x] rc4-md5
   - [x] chacha20
   - [x] chacha20-ietf
+  - [x] xchacha20
   - [x] salsa20
 
 ## License

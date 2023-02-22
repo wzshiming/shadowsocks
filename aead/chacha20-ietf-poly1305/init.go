@@ -7,4 +7,5 @@ import (
 
 func init() {
 	aead.RegisterCipher("chacha20-ietf-poly1305", 32, chacha20poly1305.New)
+	aead.RegisterCipher("xchacha20-poly1305", 32, chacha20poly1305.NewX)
 }
