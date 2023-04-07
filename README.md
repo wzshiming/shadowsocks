@@ -53,6 +53,7 @@ The following is the implementation of other proxy protocols
   - [x] chacha20-ietf
   - [x] xchacha20
   - [x] salsa20
+- [x] dummy (no encryption)
 
 ## License
 
