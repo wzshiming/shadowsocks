@@ -16,8 +16,12 @@ type ConnCipher interface {
 
 var registerCipher = map[string]func(password string) (ConnCipher, error){}
 
+func formatMethod(method string) string {
+	return strings.ToLower(strings.ReplaceAll(method, "_", "-"))
+}
+
 func RegisterCipher(method string, fun func(password string) (ConnCipher, error)) {
-	registerCipher[strings.ToLower(method)] = fun
+	registerCipher[formatMethod(method)] = fun
 }
 
 func CipherList() []string {
@@ -30,14 +34,13 @@ func CipherList() []string {
 }
 
 func IsCipher(method string) bool {
-	_, ok := registerCipher[method]
+	_, ok := registerCipher[formatMethod(method)]
 	return ok
 }
 
 // NewCipher creates a cipher that can be used in Dial()
 func NewCipher(method, password string) (c ConnCipher, err error) {
-	method = strings.ToLower(method)
-	gen, ok := registerCipher[method]
+	gen, ok := registerCipher[formatMethod(method)]
 	if ok {
 		return gen(password)
 	}
