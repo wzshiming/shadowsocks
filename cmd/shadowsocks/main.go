@@ -24,11 +24,16 @@ func init() {
 
 func main() {
 	logger := log.New(os.Stderr, "[shadowsocks] ", log.LstdFlags)
+	connCipher, err := shadowsocks.NewCipher(cipher, password)
+	if err != nil {
+		logger.Println(err)
+		os.Exit(1)
+	}
+
 	go func() {
 		svc := &shadowsocks.Server{
-			Logger:   logger,
-			Cipher:   cipher,
-			Password: password,
+			Logger:     logger,
+			ConnCipher: connCipher,
 		}
 
 		err := svc.ListenAndServe("tcp", address)
@@ -39,9 +44,8 @@ func main() {
 	}()
 	go func() {
 		svc := &shadowsocks.PacketServer{
-			Logger:   logger,
-			Cipher:   cipher,
-			Password: password,
+			Logger:     logger,
+			ConnCipher: connCipher,
 		}
 
 		err := svc.ListenAndServe("udp", address)
