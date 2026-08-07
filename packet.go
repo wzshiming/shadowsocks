@@ -49,6 +49,10 @@ func toUDPAddr(addr net.Addr) (net.Addr, error) {
 	case *net.UDPAddr:
 		return addr, nil
 	case *address:
+		if a.IP == nil {
+			// FQDN address, needs resolving.
+			return net.ResolveUDPAddr("udp", a.Address())
+		}
 		return &net.UDPAddr{
 			IP:   a.IP,
 			Port: a.Port,
