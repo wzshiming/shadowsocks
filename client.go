@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"net"
-	"net/url"
 	"time"
 )
 
@@ -35,39 +34,18 @@ type Dialer struct {
 // NewDialer returns a new Dialer that dials through the provided
 // proxy server's network and address.
 func NewDialer(addr string) (*Dialer, error) {
-	d := &Dialer{
+	cfg, err := parseProxyURL(addr)
+	if err != nil {
+		return nil, err
+	}
+	return &Dialer{
 		ProxyNetwork: "tcp",
+		ProxyAddress: cfg.Address,
+		Cipher:       cfg.Cipher,
+		Password:     cfg.Password,
+		ConnCipher:   cfg.ConnCipher,
 		Timeout:      time.Minute,
-	}
-	u, err := url.Parse(addr)
-	if err != nil {
-		return nil, err
-	}
-	switch u.Scheme {
-	case "ss", "shadowsocks":
-	default:
-		return nil, fmt.Errorf("unsupported protocol '%s'", u.Scheme)
-	}
-	host := u.Host
-	port := u.Port()
-	if port == "" {
-		port = "8379"
-		hostname := u.Hostname()
-		host = net.JoinHostPort(hostname, port)
-	}
-	if u.User != nil {
-		d.Cipher, d.Password, err = GetCipherAndPasswordFromUserinfo(u.User)
-		if err != nil {
-			return nil, err
-		}
-	}
-	d.ProxyAddress = host
-	cipher, err := NewCipher(d.Cipher, d.Password)
-	if err != nil {
-		return nil, err
-	}
-	d.ConnCipher = cipher
-	return d, nil
+	}, nil
 }
 
 // DialContext connect to the provided address on the provided network.

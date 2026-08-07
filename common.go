@@ -114,6 +114,44 @@ func GetCipherAndPasswordFromUserinfo(user *url.Userinfo) (cipher, password stri
 	return cipher, password, nil
 }
 
+type proxyConfig struct {
+	Address    string
+	Cipher     string
+	Password   string
+	ConnCipher ConnCipher
+}
+
+// parseProxyURL parses an ss:// URL into address, cipher and password.
+func parseProxyURL(addr string) (*proxyConfig, error) {
+	u, err := url.Parse(addr)
+	if err != nil {
+		return nil, err
+	}
+	switch u.Scheme {
+	case "ss", "shadowsocks":
+	default:
+		return nil, fmt.Errorf("unsupported protocol '%s'", u.Scheme)
+	}
+	host := u.Host
+	if u.Port() == "" {
+		host = net.JoinHostPort(u.Hostname(), "8379")
+	}
+	var cfg proxyConfig
+	if u.User != nil {
+		cfg.Cipher, cfg.Password, err = GetCipherAndPasswordFromUserinfo(u.User)
+		if err != nil {
+			return nil, err
+		}
+	}
+	connCipher, err := NewCipher(cfg.Cipher, cfg.Password)
+	if err != nil {
+		return nil, err
+	}
+	cfg.ConnCipher = connCipher
+	cfg.Address = host
+	return &cfg, nil
+}
+
 type Logger interface {
 	Println(v ...interface{})
 }

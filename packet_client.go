@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"net"
-	"net/url"
 )
 
 type PacketClient struct {
@@ -30,36 +29,17 @@ type PacketClient struct {
 }
 
 func NewPacketClient(addr string) (*PacketClient, error) {
-	d := &PacketClient{
+	cfg, err := parseProxyURL(addr)
+	if err != nil {
+		return nil, err
+	}
+	return &PacketClient{
 		ProxyNetwork: "udp",
-	}
-	u, err := url.Parse(addr)
-	if err != nil {
-		return nil, err
-	}
-	switch u.Scheme {
-	case "ss", "shadowsocks":
-	default:
-		return nil, fmt.Errorf("unsupported protocol '%s'", u.Scheme)
-	}
-	host := u.Host
-	port := u.Port()
-	if port == "" {
-		port = "8379"
-		hostname := u.Hostname()
-		host = net.JoinHostPort(hostname, port)
-	}
-	if u.User != nil {
-		d.Cipher = u.User.Username()
-		d.Password, _ = u.User.Password()
-	}
-	d.ProxyAddress = host
-	cipher, err := NewCipher(d.Cipher, d.Password)
-	if err != nil {
-		return nil, err
-	}
-	d.ConnCipher = cipher
-	return d, nil
+		ProxyAddress: cfg.Address,
+		Cipher:       cfg.Cipher,
+		Password:     cfg.Password,
+		ConnCipher:   cfg.ConnCipher,
+	}, nil
 }
 
 func (l *PacketClient) proxyListenPacket(ctx context.Context, network, address string) (net.PacketConn, error) {

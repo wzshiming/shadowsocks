@@ -2,7 +2,6 @@ package shadowsocks
 
 import (
 	"context"
-	"fmt"
 	"net"
 	"net/url"
 )
@@ -17,41 +16,18 @@ type SimplePacketServer struct {
 
 // NewSimplePacketServer creates a new NewSimplePacketServer
 func NewSimplePacketServer(addr string) (*SimplePacketServer, error) {
+	cfg, err := parseProxyURL(addr)
+	if err != nil {
+		return nil, err
+	}
 	s := &SimplePacketServer{
 		PacketServer: *NewPacketServer(),
+		Network:      "udp",
+		Address:      cfg.Address,
 	}
-	u, err := url.Parse(addr)
-	if err != nil {
-		return nil, err
-	}
-	switch u.Scheme {
-	case "ss", "shadowsocks":
-	default:
-		return nil, fmt.Errorf("unsupported protocol '%s'", u.Scheme)
-	}
-	host := u.Host
-	port := u.Port()
-	if port == "" {
-		port = "8379"
-		hostname := u.Hostname()
-		host = net.JoinHostPort(hostname, port)
-	}
-
-	if u.User != nil {
-		s.Cipher, s.Password, err = GetCipherAndPasswordFromUserinfo(u.User)
-		if err != nil {
-			return nil, err
-		}
-	}
-
-	cipher, err := NewCipher(s.Cipher, s.Password)
-	if err != nil {
-		return nil, err
-	}
-	s.ConnCipher = cipher
-
-	s.Address = host
-	s.Network = "udp"
+	s.Cipher = cfg.Cipher
+	s.Password = cfg.Password
+	s.ConnCipher = cfg.ConnCipher
 	return s, nil
 }
 
