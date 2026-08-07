@@ -161,7 +161,14 @@ func (p *PacketServer) session(conn *packetServer, src, dest net.Addr) (*session
 		last: time.Now(),
 		conn: forward,
 	}
+	// Re-check to avoid leaking forward when another goroutine won the race.
 	p.connTableMut.Lock()
+	if exist, ok := p.connTable[key]; ok {
+		exist.last = time.Now()
+		p.connTableMut.Unlock()
+		forward.Close()
+		return exist, nil
+	}
 	p.connTable[key] = sess
 	p.connTableMut.Unlock()
 
