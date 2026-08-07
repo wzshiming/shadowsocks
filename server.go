@@ -3,6 +3,7 @@ package shadowsocks
 import (
 	"context"
 	"net"
+	"time"
 )
 
 // Server is accepting connections and handling the details of the shadowsocks protocol
@@ -22,6 +23,8 @@ type Server struct {
 	ConnCipher ConnCipher
 	// BytesPool getting and returning temporary bytes for use by io.CopyBuffer
 	BytesPool BytesPool
+	// HandshakeTimeout is the maximum amount of time waiting for the handshake
+	HandshakeTimeout time.Duration
 }
 
 // NewServer creates a new Server
@@ -61,10 +64,16 @@ func (s *Server) ServeConn(conn net.Conn) {
 
 func (s *Server) serveConn(conn net.Conn) error {
 	ctx := s.context()
+	if s.HandshakeTimeout > 0 {
+		conn.SetReadDeadline(time.Now().Add(s.HandshakeTimeout))
+	}
 	conn = s.ConnCipher.StreamConn(conn)
 	addr, err := readAddress(conn)
 	if err != nil {
 		return err
+	}
+	if s.HandshakeTimeout > 0 {
+		conn.SetReadDeadline(time.Time{})
 	}
 	c, err := s.proxyDial(ctx, "tcp", addr.String())
 	if err != nil {
