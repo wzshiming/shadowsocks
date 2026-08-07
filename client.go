@@ -131,6 +131,7 @@ func (d *Dialer) connect(ctx context.Context, address string) (net.Conn, error) 
 
 	err = writeAddress(conn, addr)
 	if err != nil {
+		conn.Close()
 		return nil, err
 	}
 	return conn, nil
