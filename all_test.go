@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/wzshiming/shadowsocks"
 	_ "github.com/wzshiming/shadowsocks/init"
@@ -190,5 +191,75 @@ func TestPacket(t *testing.T) {
 		if "echo "+tmp != string(buf[:i]) {
 			t.Error("resp", i, string(buf[:i]), addr)
 		}
+	}
+}
+
+func TestPacketDiscardInvalid(t *testing.T) {
+	echo, err := net.ListenPacket("udp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer echo.Close()
+	go func() {
+		var buf [1024]byte
+		for {
+			n, addr, err := echo.ReadFrom(buf[:])
+			if err != nil {
+				return
+			}
+			echo.WriteTo(append([]byte("echo "), buf[:n]...), addr)
+		}
+	}()
+
+	remote, err := shadowsocks.NewSimplePacketServer("ss://aes-128-gcm:123@127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := remote.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	defer remote.Close()
+
+	local, err := shadowsocks.NewPacketClient(remote.ProxyURL())
+	if err != nil {
+		t.Fatal(err)
+	}
+	client, err := local.ListenPacket(context.Background(), "udp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+
+	junk := [][]byte{nil, {1, 2, 3}, make([]byte, 64)}
+	targets := []struct {
+		name string
+		addr net.Addr
+	}{
+		{"client", client.LocalAddr()},
+		{"server", remote.PacketConn.LocalAddr()},
+	}
+	for _, target := range targets {
+		t.Run(target.name, func(t *testing.T) {
+			for _, datagram := range junk {
+				if _, err := echo.WriteTo(datagram, target.addr); err != nil {
+					t.Fatal(err)
+				}
+			}
+			client.SetReadDeadline(time.Now().Add(5 * time.Second))
+			for i := 0; i != 2; i++ {
+				msg := fmt.Sprintf("hello %d", i)
+				if _, err := client.WriteTo([]byte(msg), echo.LocalAddr()); err != nil {
+					t.Fatal(err)
+				}
+				var buf [1024]byte
+				n, _, err := client.ReadFrom(buf[:])
+				if err != nil {
+					t.Fatal(err)
+				}
+				if got := string(buf[:n]); got != "echo "+msg {
+					t.Fatalf("got %q, want %q", got, "echo "+msg)
+				}
+			}
+		})
 	}
 }

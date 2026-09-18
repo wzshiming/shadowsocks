@@ -2,7 +2,6 @@ package shadowsocks
 
 import (
 	"context"
-	"fmt"
 	"net"
 )
 
@@ -79,19 +78,21 @@ type packetClient struct {
 func (p *packetClient) ReadFrom(b []byte) (n int, addr net.Addr, err error) {
 	buf := getBytes(p.BytesPool)
 	defer putBytes(p.BytesPool, buf)
-	n, a, err := p.PacketConn.ReadFrom(buf)
-	if err != nil {
-		return 0, nil, err
+	for {
+		n, _, err := p.PacketConn.ReadFrom(buf)
+		if err != nil {
+			return 0, nil, err
+		}
+		n, addr, err = decryptPacket(p.Encryptor, p.BytesPool, b, buf[:n])
+		if err == nil {
+			addr, err = toUDPAddr(addr)
+		}
+		if err != nil {
+			// Drop undecodable datagrams; only socket errors end the read.
+			continue
+		}
+		return n, addr, nil
 	}
-	n, addr, err = decryptPacket(p.Encryptor, p.BytesPool, b, buf[:n])
-	if err != nil {
-		return 0, nil, fmt.Errorf("from %v: %v", a, err)
-	}
-	addr, err = toUDPAddr(addr)
-	if err != nil {
-		return 0, nil, err
-	}
-	return n, addr, nil
 }
 
 func (p *packetClient) WriteTo(b []byte, addr net.Addr) (n int, err error) {
