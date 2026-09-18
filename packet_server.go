@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"net"
-	"strings"
 	"sync"
 	"time"
 )
@@ -39,7 +38,13 @@ type PacketServer struct {
 	BytesPool BytesPool
 
 	connTableMut sync.Mutex
-	connTable    map[string]*session
+	connTable    map[sessionKey]*session
+}
+
+// sessionKey scopes a relay session to the ServePacket call that admitted it.
+type sessionKey struct {
+	owner     *packetServer
+	src, dest string
 }
 
 type session struct {
@@ -51,7 +56,7 @@ func NewPacketServer() *PacketServer {
 	return &PacketServer{
 		Context:      context.Background(),
 		ProxyNetwork: "udp",
-		connTable:    map[string]*session{},
+		connTable:    map[sessionKey]*session{},
 	}
 }
 
@@ -75,13 +80,7 @@ func (p *PacketServer) ServePacket(conn net.PacketConn) error {
 	ctx, cancel := context.WithCancel(p.context())
 	defer func() {
 		cancel()
-		p.connTableMut.Lock()
-		table := p.connTable
-		p.connTable = map[string]*session{}
-		p.connTableMut.Unlock()
-		for _, sess := range table {
-			sess.conn.Close()
-		}
+		p.evict(func(key sessionKey, _ *session) bool { return key.owner == ps })
 	}()
 	go p.gcTask(ctx)
 	for {
@@ -120,16 +119,21 @@ func (p *PacketServer) timeout() time.Duration {
 
 func (p *PacketServer) gc() {
 	deadline := time.Now().Add(-p.timeout())
-	var expired []*session
+	p.evict(func(_ sessionKey, sess *session) bool { return deadline.After(sess.last) })
+}
+
+// evict removes matching sessions from the table and closes them outside the lock.
+func (p *PacketServer) evict(match func(sessionKey, *session) bool) {
+	var evicted []*session
 	p.connTableMut.Lock()
-	for k, sess := range p.connTable {
-		if deadline.After(sess.last) {
-			delete(p.connTable, k)
-			expired = append(expired, sess)
+	for key, sess := range p.connTable {
+		if match(key, sess) {
+			delete(p.connTable, key)
+			evicted = append(evicted, sess)
 		}
 	}
 	p.connTableMut.Unlock()
-	for _, sess := range expired {
+	for _, sess := range evicted {
 		sess.conn.Close()
 	}
 }
@@ -161,7 +165,7 @@ func (p *PacketServer) forward(ctx context.Context, conn *packetServer, src, des
 }
 
 func (p *PacketServer) session(ctx context.Context, conn *packetServer, src, dest net.Addr) (*session, error) {
-	key := strings.Join([]string{src.String(), dest.String()}, "|")
+	key := sessionKey{owner: conn, src: src.String(), dest: dest.String()}
 
 	p.connTableMut.Lock()
 	sess, ok := p.connTable[key]
@@ -259,16 +263,14 @@ func (p *packetServer) readFrom(b []byte) (n int, ori, addr net.Addr, err error)
 		}
 		n, addr, err = decryptPacket(p.Encryptor, p.BytesPool, b, buf[:n])
 		if err == nil {
-			addr, err = toUDPAddr(addr)
+			return n, a, addr, nil
 		}
-		if err != nil {
-			// Drop undecodable datagrams; only socket errors end the read.
-			if p.Logger != nil {
-				p.Logger.Println(fmt.Errorf("from %v: %v", a, err))
-			}
-			continue
+		if !errors.Is(err, ErrInvalidPacket) {
+			return 0, nil, nil, err
 		}
-		return n, a, addr, nil
+		if p.Logger != nil {
+			p.Logger.Println(fmt.Errorf("from %v: %v", a, err))
+		}
 	}
 }
 

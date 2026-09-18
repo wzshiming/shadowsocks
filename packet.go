@@ -3,6 +3,7 @@ package shadowsocks
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"net"
 )
 
@@ -11,17 +12,21 @@ type ListenPacket interface {
 }
 
 func decryptPacket(c ConnCipher, p BytesPool, dist, src []byte) (n int, addr net.Addr, err error) {
-	i, err := c.Decrypt(dist, src)
+	plain := getBytes(p)
+	defer putBytes(p, plain)
+	i, err := c.Decrypt(plain, src)
 	if err != nil {
 		return 0, nil, err
 	}
-	buf := bytes.NewBuffer(dist[:i])
+	buf := bytes.NewBuffer(plain[:i])
 	a, err := readAddress(buf)
-	if err != nil {
-		return 0, nil, err
+	if err == nil {
+		addr, err = toUDPAddr(a)
 	}
-	i = copy(dist, buf.Bytes())
-	return i, a, nil
+	if err != nil {
+		return 0, nil, fmt.Errorf("%w: %w", ErrInvalidPacket, err)
+	}
+	return copy(dist, buf.Bytes()), addr, nil
 }
 
 func encryptPacket(c ConnCipher, p BytesPool, dist, src []byte, addr net.Addr) (n int, err error) {

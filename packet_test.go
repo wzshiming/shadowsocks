@@ -3,6 +3,7 @@ package shadowsocks
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"sync"
 	"sync/atomic"
@@ -11,9 +12,10 @@ import (
 )
 
 var (
-	errBoom  = errors.New("boom")
-	srcAddr  = &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 1001}
-	destAddr = &net.UDPAddr{IP: net.IPv4(127, 0, 0, 2), Port: 1002}
+	errBoom   = errors.New("boom")
+	errCipher = errors.New("cipher unavailable")
+	srcAddr   = &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 1001}
+	destAddr  = &net.UDPAddr{IP: net.IPv4(127, 0, 0, 2), Port: 1002}
 )
 
 type plainCipher struct{}
@@ -21,6 +23,13 @@ type plainCipher struct{}
 func (plainCipher) StreamConn(conn net.Conn) net.Conn     { return conn }
 func (plainCipher) Decrypt(dist, src []byte) (int, error) { return copy(dist, src), nil }
 func (plainCipher) Encrypt(dist, src []byte) (int, error) { return copy(dist, src), nil }
+
+type failingCipher struct {
+	plainCipher
+	err error
+}
+
+func (c failingCipher) Decrypt([]byte, []byte) (int, error) { return 0, c.err }
 
 type countingPool struct{ gets, puts atomic.Int32 }
 
@@ -153,6 +162,55 @@ func TestPacketClientReadFromDiscardsInvalid(t *testing.T) {
 	}
 }
 
+var cipherErrorCases = []struct {
+	name      string
+	decrypt   error
+	want      error
+	readCalls int32
+}{
+	{"operational", errCipher, errCipher, 1},
+	{"malformed", fmt.Errorf("%w: bad tag", ErrInvalidPacket), errBoom, 2},
+}
+
+func TestPacketClientReadFromCipherError(t *testing.T) {
+	for _, tt := range cipherErrorCases {
+		t.Run(tt.name, func(t *testing.T) {
+			fake := newFakePacketConn()
+			fake.reads <- fakeRead{data: plainPacket(t, destAddr, "hi"), addr: srcAddr}
+			fake.reads <- fakeRead{err: errBoom}
+			pool := &countingPool{}
+			client := &packetClient{PacketConn: fake, Encryptor: failingCipher{err: tt.decrypt}, BytesPool: pool, Peer: srcAddr}
+			if _, _, err := client.ReadFrom(make([]byte, 64)); !errors.Is(err, tt.want) {
+				t.Fatalf("got %v, want %v", err, tt.want)
+			}
+			if got := fake.readCalls.Load(); got != tt.readCalls {
+				t.Fatalf("readCalls = %d, want %d", got, tt.readCalls)
+			}
+			if gets, puts := pool.gets.Load(), pool.puts.Load(); gets != puts {
+				t.Fatalf("pool gets %d, puts %d", gets, puts)
+			}
+		})
+	}
+}
+
+func TestPacketServerCipherError(t *testing.T) {
+	for _, tt := range cipherErrorCases {
+		t.Run(tt.name, func(t *testing.T) {
+			p := NewPacketServer()
+			p.ConnCipher = failingCipher{err: tt.decrypt}
+			lc := newFakePacketConn()
+			lc.reads <- fakeRead{data: plainPacket(t, destAddr, "hi"), addr: srcAddr}
+			lc.reads <- fakeRead{err: errBoom}
+			if err := p.ServePacket(lc); !errors.Is(err, tt.want) {
+				t.Fatalf("got %v, want %v", err, tt.want)
+			}
+			if got := lc.readCalls.Load(); got != tt.readCalls {
+				t.Fatalf("readCalls = %d, want %d", got, tt.readCalls)
+			}
+		})
+	}
+}
+
 func TestPacketServerDiscardsInvalidDatagram(t *testing.T) {
 	forward := newFakePacketConn()
 	p := NewPacketServer()
@@ -204,10 +262,10 @@ func TestPacketServerReturnsBufferOnReadError(t *testing.T) {
 func TestPacketServerGC(t *testing.T) {
 	fresh, stale := newFakePacketConn(), newFakePacketConn()
 	p := NewPacketServer()
-	p.connTable["fresh"] = &session{last: time.Now().Add(-time.Second), conn: fresh}
-	p.connTable["stale"] = &session{last: time.Now().Add(-2 * time.Minute), conn: stale}
+	p.connTable[sessionKey{src: "fresh"}] = &session{last: time.Now().Add(-time.Second), conn: fresh}
+	p.connTable[sessionKey{src: "stale"}] = &session{last: time.Now().Add(-2 * time.Minute), conn: stale}
 	p.gc()
-	if _, ok := p.connTable["fresh"]; !ok || len(p.connTable) != 1 {
+	if _, ok := p.connTable[sessionKey{src: "fresh"}]; !ok || len(p.connTable) != 1 {
 		t.Fatalf("table = %v", p.connTable)
 	}
 	if fresh.closes.Load() != 0 || stale.closes.Load() != 1 {
@@ -242,6 +300,51 @@ func TestPacketServerShutdownClosesSessions(t *testing.T) {
 	waitFor(t, "pool balanced", func() bool { return pool.gets.Load() == pool.puts.Load() })
 	if got := forward.closes.Load(); got != 1 {
 		t.Fatalf("forward closes = %d after reader exit, want 1", got)
+	}
+}
+
+func TestPacketServerShutdownKeepsOtherServeSessions(t *testing.T) {
+	otherSrc := &net.UDPAddr{IP: net.IPv4(127, 0, 0, 3), Port: 1003}
+	for _, tt := range []struct {
+		name string
+		src  net.Addr
+	}{{"distinct", otherSrc}, {"same", srcAddr}} {
+		t.Run(tt.name, func(t *testing.T) {
+			forwardA, forwardB := newFakePacketConn(), newFakePacketConn()
+			forwards := make(chan net.PacketConn, 2)
+			forwards <- forwardA
+			forwards <- forwardB
+			p := NewPacketServer()
+			p.ConnCipher = plainCipher{}
+			p.ProxyPacket = func(context.Context, string, string) (net.PacketConn, error) { return <-forwards, nil }
+
+			lcA, lcB := newFakePacketConn(), newFakePacketConn()
+			errA, errB := make(chan error, 1), make(chan error, 1)
+			lcA.reads <- fakeRead{data: plainPacket(t, destAddr, "a"), addr: srcAddr}
+			go func() { errA <- p.ServePacket(lcA) }()
+			recv(t, forwardA.writes)
+			lcB.reads <- fakeRead{data: plainPacket(t, destAddr, "b"), addr: tt.src}
+			go func() { errB <- p.ServePacket(lcB) }()
+			recv(t, forwardB.writes)
+
+			lcA.reads <- fakeRead{err: errBoom}
+			if err := recv(t, errA); err != errBoom {
+				t.Fatalf("got %v, want errBoom", err)
+			}
+			if forwardA.closes.Load() != 1 || forwardB.closes.Load() != 0 || tableLen(p) != 1 {
+				t.Fatalf("closes A %d, B %d, table len %d", forwardA.closes.Load(), forwardB.closes.Load(), tableLen(p))
+			}
+
+			forwardB.reads <- fakeRead{data: []byte("reply"), addr: destAddr}
+			if write := recv(t, lcB.writes); string(write.data) != string(plainPacket(t, destAddr, "reply")) || write.addr.String() != tt.src.String() {
+				t.Fatalf("replied %q to %v", write.data, write.addr)
+			}
+			lcB.reads <- fakeRead{err: errBoom}
+			recv(t, errB)
+			if forwardB.closes.Load() != 1 || tableLen(p) != 0 {
+				t.Fatalf("B closes %d, table len %d", forwardB.closes.Load(), tableLen(p))
+			}
+		})
 	}
 }
 
@@ -307,7 +410,7 @@ func TestPacketServerReaderExitKeepsReplacement(t *testing.T) {
 	if _, err := p.session(ctx, ps, srcAddr, destAddr); err != nil {
 		t.Fatal(err)
 	}
-	key := srcAddr.String() + "|" + destAddr.String()
+	key := sessionKey{owner: ps, src: srcAddr.String(), dest: destAddr.String()}
 	// Window between gc removing the entry and the first reader noticing.
 	p.connTableMut.Lock()
 	delete(p.connTable, key)

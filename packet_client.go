@@ -2,6 +2,7 @@ package shadowsocks
 
 import (
 	"context"
+	"errors"
 	"net"
 )
 
@@ -85,13 +86,11 @@ func (p *packetClient) ReadFrom(b []byte) (n int, addr net.Addr, err error) {
 		}
 		n, addr, err = decryptPacket(p.Encryptor, p.BytesPool, b, buf[:n])
 		if err == nil {
-			addr, err = toUDPAddr(addr)
+			return n, addr, nil
 		}
-		if err != nil {
-			// Drop undecodable datagrams; only socket errors end the read.
-			continue
+		if !errors.Is(err, ErrInvalidPacket) {
+			return 0, nil, err
 		}
-		return n, addr, nil
 	}
 }
 

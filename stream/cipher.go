@@ -74,7 +74,7 @@ func (c *Cipher) Encrypt(dest, src []byte) (int, error) {
 
 func (c *Cipher) Decrypt(dest, src []byte) (int, error) {
 	if len(src) <= c.IvLen {
-		return 0, io.ErrShortBuffer
+		return 0, shadowsocks.ErrInvalidPacket
 	}
 	dec, err := c.NewDecrypt(c.Key, src[:c.IvLen])
 	if err != nil {

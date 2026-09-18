@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"crypto/sha1"
 	"encoding/binary"
+	"fmt"
 	"io"
 	"net"
 
@@ -111,7 +112,7 @@ func (c *Cipher) Encrypt(dest, src []byte) (int, error) {
 func (c *Cipher) Decrypt(dest, src []byte) (int, error) {
 	saltSize := c.SaltSize()
 	if len(src) < saltSize {
-		return 0, io.ErrShortBuffer
+		return 0, shadowsocks.ErrInvalidPacket
 	}
 	salt := src[:saltSize]
 	aead, err := c.newDecrypt(salt)
@@ -119,11 +120,17 @@ func (c *Cipher) Decrypt(dest, src []byte) (int, error) {
 		return 0, err
 	}
 	head := len(src) - (saltSize + aead.Overhead())
-	if head < 0 || head >= len(dest) {
+	if head < 0 {
+		return 0, shadowsocks.ErrInvalidPacket
+	}
+	if head >= len(dest) {
 		return 0, io.ErrShortBuffer
 	}
 	b, err := aead.Open(dest[:0], _zerononce[:aead.NonceSize()], src[saltSize:], nil)
-	return len(b), err
+	if err != nil {
+		return 0, fmt.Errorf("%w: %w", shadowsocks.ErrInvalidPacket, err)
+	}
+	return len(b), nil
 }
 
 // payloadSizeMask is the maximum size of payload in bytes.
