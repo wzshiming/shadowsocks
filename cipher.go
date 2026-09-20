@@ -2,11 +2,15 @@ package shadowsocks
 
 import (
 	"crypto/md5"
+	"errors"
 	"fmt"
 	"net"
 	"sort"
 	"strings"
 )
+
+// ErrInvalidPacket marks malformed datagrams that packet readers may discard.
+var ErrInvalidPacket = errors.New("shadowsocks: invalid packet")
 
 type ConnCipher interface {
 	StreamConn(net.Conn) net.Conn

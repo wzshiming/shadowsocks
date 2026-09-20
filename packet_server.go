@@ -2,9 +2,9 @@ package shadowsocks
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
-	"strings"
 	"sync"
 	"time"
 )
@@ -38,7 +38,13 @@ type PacketServer struct {
 	BytesPool BytesPool
 
 	connTableMut sync.Mutex
-	connTable    map[string]*session
+	connTable    map[sessionKey]*session
+}
+
+// sessionKey scopes a relay session to the ServePacket call that admitted it.
+type sessionKey struct {
+	owner     *packetServer
+	src, dest string
 }
 
 type session struct {
@@ -50,7 +56,7 @@ func NewPacketServer() *PacketServer {
 	return &PacketServer{
 		Context:      context.Background(),
 		ProxyNetwork: "udp",
-		connTable:    map[string]*session{},
+		connTable:    map[sessionKey]*session{},
 	}
 }
 
@@ -69,29 +75,31 @@ func (p *PacketServer) ServePacket(conn net.PacketConn) error {
 		PacketConn: conn,
 		BytesPool:  p.BytesPool,
 		Encryptor:  p.ConnCipher,
+		Logger:     p.Logger,
 	}
 	ctx, cancel := context.WithCancel(p.context())
-	defer cancel()
+	defer func() {
+		cancel()
+		p.evict(func(key sessionKey, _ *session) bool { return key.owner == ps })
+	}()
 	go p.gcTask(ctx)
 	for {
 		buf := getBytes(p.BytesPool)
 		i, src, dest, err := ps.readFrom(buf[:])
 		if err != nil {
+			putBytes(p.BytesPool, buf)
 			return err
 		}
 		go func() {
 			defer putBytes(p.BytesPool, buf)
-			p.forward(ps, src, dest, buf[:i])
+			p.forward(ctx, ps, src, dest, buf[:i])
 		}()
 	}
 }
 
 func (p *PacketServer) gcTask(ctx context.Context) {
-	timeout := p.Timeout
-	if timeout == 0 {
-		timeout = time.Minute
-	}
-	tick := time.NewTicker(timeout)
+	tick := time.NewTicker(p.timeout())
+	defer tick.Stop()
 	for {
 		select {
 		case <-tick.C:
@@ -102,15 +110,31 @@ func (p *PacketServer) gcTask(ctx context.Context) {
 	}
 }
 
+func (p *PacketServer) timeout() time.Duration {
+	if p.Timeout == 0 {
+		return time.Minute
+	}
+	return p.Timeout
+}
+
 func (p *PacketServer) gc() {
+	deadline := time.Now().Add(-p.timeout())
+	p.evict(func(_ sessionKey, sess *session) bool { return deadline.After(sess.last) })
+}
+
+// evict removes matching sessions from the table and closes them outside the lock.
+func (p *PacketServer) evict(match func(sessionKey, *session) bool) {
+	var evicted []*session
 	p.connTableMut.Lock()
-	defer p.connTableMut.Unlock()
-	deadline := time.Now().Add(-p.Timeout)
-	for k, sess := range p.connTable {
-		if deadline.After(sess.last) {
-			sess.conn.SetDeadline(deadline)
-			delete(p.connTable, k)
+	for key, sess := range p.connTable {
+		if match(key, sess) {
+			delete(p.connTable, key)
+			evicted = append(evicted, sess)
 		}
+	}
+	p.connTableMut.Unlock()
+	for _, sess := range evicted {
+		sess.conn.Close()
 	}
 }
 
@@ -123,8 +147,8 @@ func (p *PacketServer) proxyListenPacket(ctx context.Context, network, address s
 	return proxyPacket(ctx, network, address)
 }
 
-func (p *PacketServer) forward(conn *packetServer, src, dest net.Addr, buf []byte) {
-	sess, err := p.session(conn, src, dest)
+func (p *PacketServer) forward(ctx context.Context, conn *packetServer, src, dest net.Addr, buf []byte) {
+	sess, err := p.session(ctx, conn, src, dest)
 	if err != nil {
 		if p.Logger != nil {
 			p.Logger.Println(err)
@@ -140,8 +164,8 @@ func (p *PacketServer) forward(conn *packetServer, src, dest net.Addr, buf []byt
 
 }
 
-func (p *PacketServer) session(conn *packetServer, src, dest net.Addr) (*session, error) {
-	key := strings.Join([]string{src.String(), dest.String()}, "|")
+func (p *PacketServer) session(ctx context.Context, conn *packetServer, src, dest net.Addr) (*session, error) {
+	key := sessionKey{owner: conn, src: src.String(), dest: dest.String()}
 
 	p.connTableMut.Lock()
 	sess, ok := p.connTable[key]
@@ -152,7 +176,7 @@ func (p *PacketServer) session(conn *packetServer, src, dest net.Addr) (*session
 	}
 	p.connTableMut.Unlock()
 
-	forward, err := p.proxyListenPacket(p.context(), p.ProxyNetwork, ":0")
+	forward, err := p.proxyListenPacket(ctx, p.ProxyNetwork, ":0")
 	if err != nil {
 		return nil, err
 	}
@@ -163,6 +187,11 @@ func (p *PacketServer) session(conn *packetServer, src, dest net.Addr) (*session
 	}
 	// Re-check to avoid leaking forward when another goroutine won the race.
 	p.connTableMut.Lock()
+	if err := ctx.Err(); err != nil {
+		p.connTableMut.Unlock()
+		forward.Close()
+		return nil, err
+	}
 	if exist, ok := p.connTable[key]; ok {
 		exist.last = time.Now()
 		p.connTableMut.Unlock()
@@ -173,18 +202,29 @@ func (p *PacketServer) session(conn *packetServer, src, dest net.Addr) (*session
 	p.connTableMut.Unlock()
 
 	go func() {
-		key := dest.String()
 		buf := getBytes(p.BytesPool)
 		defer putBytes(p.BytesPool, buf)
+		defer func() {
+			// Whoever removes the table entry closes the forward.
+			p.connTableMut.Lock()
+			if p.connTable[key] != sess {
+				p.connTableMut.Unlock()
+				return
+			}
+			delete(p.connTable, key)
+			p.connTableMut.Unlock()
+			forward.Close()
+		}()
+		reply := dest.String()
 		for {
 			n, addr, err := forward.ReadFrom(buf[:])
 			if err != nil {
-				if p.Logger != nil {
+				if p.Logger != nil && !errors.Is(err, net.ErrClosed) {
 					p.Logger.Println(err)
 				}
 				return
 			}
-			if addr.String() != key {
+			if addr.String() != reply {
 				continue
 			}
 			_, err = conn.writeTo(buf[:n], dest, src)
@@ -210,24 +250,28 @@ type packetServer struct {
 	net.PacketConn
 	Encryptor ConnCipher
 	BytesPool BytesPool
+	Logger    Logger
 }
 
 func (p *packetServer) readFrom(b []byte) (n int, ori, addr net.Addr, err error) {
 	buf := getBytes(p.BytesPool)
 	defer putBytes(p.BytesPool, buf)
-	n, a, err := p.PacketConn.ReadFrom(buf)
-	if err != nil {
-		return 0, nil, nil, err
+	for {
+		n, a, err := p.PacketConn.ReadFrom(buf)
+		if err != nil {
+			return 0, nil, nil, err
+		}
+		n, addr, err = decryptPacket(p.Encryptor, p.BytesPool, b, buf[:n])
+		if err == nil {
+			return n, a, addr, nil
+		}
+		if !errors.Is(err, ErrInvalidPacket) {
+			return 0, nil, nil, err
+		}
+		if p.Logger != nil {
+			p.Logger.Println(fmt.Errorf("from %v: %v", a, err))
+		}
 	}
-	n, addr, err = decryptPacket(p.Encryptor, p.BytesPool, b, buf[:n])
-	if err != nil {
-		return 0, nil, nil, fmt.Errorf("from %v: %v", a, err)
-	}
-	addr, err = toUDPAddr(addr)
-	if err != nil {
-		return 0, nil, nil, err
-	}
-	return n, a, addr, nil
 }
 
 func (p *packetServer) writeTo(b []byte, ori, addr net.Addr) (n int, err error) {
