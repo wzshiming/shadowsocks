@@ -21,7 +21,7 @@ This project is to add protocol support for the [Bridge](https://github.com/wzsh
 
 ## Supported ciphers
 
-- AEAD 2022 ([SIP022](https://shadowsocks.org/doc/sip022.html), the password is a base64 encoded key of 16 or 32 bytes, e.g. `openssl rand -base64 32`)
+- AEAD 2022 ([SIP022](https://shadowsocks.org/doc/sip022.html), the password is a base64 encoded key of 16 or 32 bytes)
   - [x] 2022-blake3-aes-128-gcm
   - [x] 2022-blake3-aes-256-gcm
   - [x] 2022-blake3-chacha20-poly1305
@@ -30,7 +30,7 @@ This project is to add protocol support for the [Bridge](https://github.com/wzsh
   - [x] aes-192-gcm
   - [x] aes-256-gcm
   - [x] chacha20-ietf-poly1305
-  - [x] xchacha20-poly1305 (alias xchacha20-ietf-poly1305)
+  - [x] xchacha20-ietf-poly1305 (alias xchacha20-poly1305)
 - Stream
   - [x] aes-128-cfb
   - [x] aes-192-cfb
