@@ -1,4 +1,6 @@
-package shadowsocks
+// Package socks encodes the addresses of the shadowsocks protocols, which
+// use the format of SOCKS5.
+package socks
 
 import (
 	"encoding/binary"
@@ -20,26 +22,26 @@ const (
 	ipv6Address = 0x04
 )
 
-// address is a SOCKS-specific address.
+// Addr is the target of a connection or a packet.
 // Either Name or IP is used exclusively.
-type address struct {
+type Addr struct {
 	Name string // fully-qualified domain name
 	IP   net.IP
 	Port int
 }
 
-func (a *address) Network() string { return "shadowsocks" }
+func (a *Addr) Network() string { return "shadowsocks" }
 
-func (a *address) String() string {
+func (a *Addr) String() string {
 	if a == nil {
 		return "<nil>"
 	}
 	return a.Address()
 }
 
-// address returns a string suitable to dial; prefer returning IP-based
+// Address returns a string suitable to dial; prefer returning IP-based
 // address, fallback to Name
-func (a address) Address() string {
+func (a Addr) Address() string {
 	port := strconv.Itoa(a.Port)
 	if 0 != len(a.IP) {
 		return net.JoinHostPort(a.IP.String(), port)
@@ -47,8 +49,9 @@ func (a address) Address() string {
 	return net.JoinHostPort(a.Name, port)
 }
 
-func parseAddress(s string) (*address, error) {
-	var addr address
+// ParseAddr parses a "host:port" address.
+func ParseAddr(s string) (*Addr, error) {
+	var addr Addr
 	host, port, err := net.SplitHostPort(s)
 	if err != nil {
 		return nil, err
@@ -71,8 +74,9 @@ func parseAddress(s string) (*address, error) {
 	return &addr, nil
 }
 
-func readAddress(r io.Reader) (*address, error) {
-	address := &address{}
+// ReadAddr reads an address in the SOCKS format.
+func ReadAddr(r io.Reader) (*Addr, error) {
+	address := &Addr{}
 
 	var addrType [1]byte
 	if _, err := r.Read(addrType[:]); err != nil {
@@ -113,59 +117,30 @@ func readAddress(r io.Reader) (*address, error) {
 	return address, nil
 }
 
-func writeAddress(w io.Writer, addr *address) error {
-	if addr == nil {
-		_, err := w.Write([]byte{ipv4Address, 0, 0, 0, 0, 0, 0})
-		if err != nil {
-			return err
-		}
-		return nil
-	}
-	if addr.IP != nil {
+// AppendAddr appends addr to b in the SOCKS format.
+func AppendAddr(b []byte, addr *Addr) ([]byte, error) {
+	port := 0
+	switch {
+	case addr == nil:
+		b = append(b, ipv4Address, 0, 0, 0, 0)
+	case addr.IP != nil:
+		port = addr.Port
 		if ip4 := addr.IP.To4(); ip4 != nil {
-			_, err := w.Write([]byte{ipv4Address})
-			if err != nil {
-				return err
-			}
-			_, err = w.Write(ip4)
-			if err != nil {
-				return err
-			}
+			b = append(append(b, ipv4Address), ip4...)
 		} else if ip6 := addr.IP.To16(); ip6 != nil {
-			_, err := w.Write([]byte{ipv6Address})
-			if err != nil {
-				return err
-			}
-			_, err = w.Write(ip6)
-			if err != nil {
-				return err
-			}
+			b = append(append(b, ipv6Address), ip6...)
 		} else {
-			_, err := w.Write([]byte{ipv4Address, 0, 0, 0, 0})
-			if err != nil {
-				return err
-			}
+			b = append(b, ipv4Address, 0, 0, 0, 0)
 		}
-	} else if addr.Name != "" {
+	case addr.Name != "":
+		port = addr.Port
 		if len(addr.Name) > 255 {
-			return errStringTooLong
+			return nil, errStringTooLong
 		}
-		_, err := w.Write([]byte{fqdnAddress, byte(len(addr.Name))})
-		if err != nil {
-			return err
-		}
-		_, err = w.Write([]byte(addr.Name))
-		if err != nil {
-			return err
-		}
-	} else {
-		_, err := w.Write([]byte{ipv4Address, 0, 0, 0, 0})
-		if err != nil {
-			return err
-		}
+		b = append(append(b, fqdnAddress, byte(len(addr.Name))), addr.Name...)
+	default:
+		port = addr.Port
+		b = append(b, ipv4Address, 0, 0, 0, 0)
 	}
-	var p [2]byte
-	binary.BigEndian.PutUint16(p[:], uint16(addr.Port))
-	_, err := w.Write(p[:])
-	return err
+	return binary.BigEndian.AppendUint16(b, uint16(port)), nil
 }

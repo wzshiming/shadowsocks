@@ -14,12 +14,12 @@ type PacketClient struct {
 	// ProxyPacket specifies the optional dial function for
 	// establishing the transport connection.
 	ProxyPacket func(ctx context.Context, network, address string) (net.PacketConn, error)
-	// Cipher use cipher protocol
-	Cipher string
+	// CipherName is the name of the cipher
+	CipherName string
 	// Password use password authentication
 	Password string
-	// ConnCipher is connect the cipher codec
-	ConnCipher ConnCipher
+	// Cipher encrypts the traffic
+	Cipher Cipher
 	// IsResolve resolve domain name on locally
 	IsResolve bool
 	// Resolver optionally specifies an alternate resolver to use
@@ -36,9 +36,9 @@ func NewPacketClient(addr string) (*PacketClient, error) {
 	return &PacketClient{
 		ProxyNetwork: "udp",
 		ProxyAddress: cfg.Address,
-		Cipher:       cfg.Cipher,
+		CipherName:   cfg.CipherName,
 		Password:     cfg.Password,
-		ConnCipher:   cfg.ConnCipher,
+		Cipher:       cfg.Cipher,
 	}, nil
 }
 
@@ -60,9 +60,14 @@ func (l *PacketClient) ListenPacket(ctx context.Context, network, address string
 	if err != nil {
 		return nil, err
 	}
+	encryptor, err := l.Cipher.ClientPacket()
+	if err != nil {
+		conn.Close()
+		return nil, err
+	}
 	conn = &packetClient{
 		PacketConn: conn,
-		Encryptor:  l.ConnCipher,
+		Encryptor:  encryptor,
 		BytesPool:  l.BytesPool,
 		Peer:       udpAddr,
 	}
@@ -71,7 +76,7 @@ func (l *PacketClient) ListenPacket(ctx context.Context, network, address string
 
 type packetClient struct {
 	net.PacketConn
-	Encryptor ConnCipher
+	Encryptor PacketSession
 	BytesPool BytesPool
 	Peer      net.Addr
 }

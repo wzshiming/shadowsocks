@@ -15,12 +15,12 @@ type Server struct {
 	Logger Logger
 	// Context is default context
 	Context context.Context
-	// Cipher use cipher protocol
-	Cipher string
+	// CipherName is the name of the cipher
+	CipherName string
 	// Password use password authentication
 	Password string
-	// ConnCipher is connect the cipher codec
-	ConnCipher ConnCipher
+	// Cipher encrypts the traffic
+	Cipher Cipher
 	// BytesPool getting and returning temporary bytes for use by io.CopyBuffer
 	BytesPool BytesPool
 	// HandshakeTimeout is the maximum amount of time waiting for the handshake
@@ -67,13 +67,13 @@ func (s *Server) serveConn(conn net.Conn) error {
 	if s.HandshakeTimeout > 0 {
 		conn.SetReadDeadline(time.Now().Add(s.HandshakeTimeout))
 	}
-	conn = s.ConnCipher.StreamConn(conn)
-	addr, err := readAddress(conn)
+	raw := conn
+	conn, addr, err := s.Cipher.ServerConn(raw)
 	if err != nil {
 		return err
 	}
 	if s.HandshakeTimeout > 0 {
-		conn.SetReadDeadline(time.Time{})
+		raw.SetReadDeadline(time.Time{})
 	}
 	c, err := s.proxyDial(ctx, "tcp", addr.String())
 	if err != nil {

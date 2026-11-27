@@ -20,9 +20,14 @@ var (
 
 type plainCipher struct{}
 
-func (plainCipher) StreamConn(conn net.Conn) net.Conn     { return conn }
-func (plainCipher) Decrypt(dist, src []byte) (int, error) { return copy(dist, src), nil }
-func (plainCipher) Encrypt(dist, src []byte) (int, error) { return copy(dist, src), nil }
+func (plainCipher) ClientConn(conn net.Conn, _ *Addr) (net.Conn, error) { return conn, nil }
+func (plainCipher) ServerConn(conn net.Conn) (net.Conn, *Addr, error)   { return conn, nil, nil }
+func (plainCipher) Decrypt(dist, src []byte) (int, error)               { return copy(dist, src), nil }
+func (plainCipher) Encrypt(dist, src []byte) (int, error)               { return copy(dist, src), nil }
+func (c plainCipher) ClientPacket() (PacketSession, error)              { return c, nil }
+func (c plainCipher) ServerPacket(dist, src []byte) (int, PacketEncrypter, error) {
+	return copy(dist, src), c, nil
+}
 
 type failingCipher struct {
 	plainCipher
@@ -30,6 +35,9 @@ type failingCipher struct {
 }
 
 func (c failingCipher) Decrypt([]byte, []byte) (int, error) { return 0, c.err }
+func (c failingCipher) ServerPacket([]byte, []byte) (int, PacketEncrypter, error) {
+	return 0, nil, c.err
+}
 
 type countingPool struct{ gets, puts atomic.Int32 }
 
@@ -140,7 +148,7 @@ func tableLen(p *PacketServer) int {
 func TestPacketClientReadFromDiscardsInvalid(t *testing.T) {
 	fake := newFakePacketConn()
 	fake.reads <- fakeRead{data: []byte{0x00, 1, 2, 3}, addr: srcAddr}
-	fake.reads <- fakeRead{data: []byte{ipv4Address, 1, 2}, addr: srcAddr}
+	fake.reads <- fakeRead{data: []byte{0x01, 1, 2}, addr: srcAddr}
 	fake.reads <- fakeRead{data: plainPacket(t, destAddr, "hi"), addr: srcAddr}
 	fake.reads <- fakeRead{err: errBoom}
 	fake.reads <- fakeRead{err: errBoom}
@@ -197,7 +205,7 @@ func TestPacketServerCipherError(t *testing.T) {
 	for _, tt := range cipherErrorCases {
 		t.Run(tt.name, func(t *testing.T) {
 			p := NewPacketServer()
-			p.ConnCipher = failingCipher{err: tt.decrypt}
+			p.Cipher = failingCipher{err: tt.decrypt}
 			lc := newFakePacketConn()
 			lc.reads <- fakeRead{data: plainPacket(t, destAddr, "hi"), addr: srcAddr}
 			lc.reads <- fakeRead{err: errBoom}
@@ -214,7 +222,7 @@ func TestPacketServerCipherError(t *testing.T) {
 func TestPacketServerDiscardsInvalidDatagram(t *testing.T) {
 	forward := newFakePacketConn()
 	p := NewPacketServer()
-	p.ConnCipher = plainCipher{}
+	p.Cipher = plainCipher{}
 	p.ProxyPacket = func(context.Context, string, string) (net.PacketConn, error) { return forward, nil }
 
 	lc := newFakePacketConn()
@@ -247,7 +255,7 @@ func TestPacketServerDiscardsInvalidDatagram(t *testing.T) {
 func TestPacketServerReturnsBufferOnReadError(t *testing.T) {
 	pool := &countingPool{}
 	p := NewPacketServer()
-	p.ConnCipher = plainCipher{}
+	p.Cipher = plainCipher{}
 	p.BytesPool = pool
 	lc := newFakePacketConn()
 	lc.reads <- fakeRead{err: errBoom}
@@ -277,7 +285,7 @@ func TestPacketServerShutdownClosesSessions(t *testing.T) {
 	forward := newFakePacketConn()
 	pool := &countingPool{}
 	p := NewPacketServer()
-	p.ConnCipher = plainCipher{}
+	p.Cipher = plainCipher{}
 	p.BytesPool = pool
 	p.ProxyPacket = func(context.Context, string, string) (net.PacketConn, error) { return forward, nil }
 
@@ -315,7 +323,7 @@ func TestPacketServerShutdownKeepsOtherServeSessions(t *testing.T) {
 			forwards <- forwardA
 			forwards <- forwardB
 			p := NewPacketServer()
-			p.ConnCipher = plainCipher{}
+			p.Cipher = plainCipher{}
 			p.ProxyPacket = func(context.Context, string, string) (net.PacketConn, error) { return <-forwards, nil }
 
 			lcA, lcB := newFakePacketConn(), newFakePacketConn()
@@ -352,7 +360,7 @@ func TestPacketServerShutdownClosesPendingSession(t *testing.T) {
 	forward := newFakePacketConn()
 	entered, release := make(chan struct{}), make(chan struct{})
 	p := NewPacketServer()
-	p.ConnCipher = plainCipher{}
+	p.Cipher = plainCipher{}
 	p.ProxyPacket = func(context.Context, string, string) (net.PacketConn, error) {
 		close(entered)
 		<-release
@@ -386,7 +394,7 @@ func TestPacketServerReaderExitClosesSession(t *testing.T) {
 	p := NewPacketServer()
 	p.ProxyPacket = func(context.Context, string, string) (net.PacketConn, error) { return forward, nil }
 	ps := &packetServer{PacketConn: newFakePacketConn(), Encryptor: plainCipher{}}
-	if _, err := p.session(context.Background(), ps, srcAddr, destAddr); err != nil {
+	if _, err := p.session(context.Background(), ps, srcAddr, destAddr, plainCipher{}); err != nil {
 		t.Fatal(err)
 	}
 	forward.reads <- fakeRead{err: errBoom}
@@ -407,7 +415,7 @@ func TestPacketServerReaderExitKeepsReplacement(t *testing.T) {
 	p.ProxyPacket = func(context.Context, string, string) (net.PacketConn, error) { return <-forwards, nil }
 	ps := &packetServer{PacketConn: newFakePacketConn(), Encryptor: plainCipher{}}
 	ctx := context.Background()
-	if _, err := p.session(ctx, ps, srcAddr, destAddr); err != nil {
+	if _, err := p.session(ctx, ps, srcAddr, destAddr, plainCipher{}); err != nil {
 		t.Fatal(err)
 	}
 	key := sessionKey{owner: ps, src: srcAddr.String(), dest: destAddr.String()}
@@ -415,7 +423,7 @@ func TestPacketServerReaderExitKeepsReplacement(t *testing.T) {
 	p.connTableMut.Lock()
 	delete(p.connTable, key)
 	p.connTableMut.Unlock()
-	replacement, err := p.session(ctx, ps, srcAddr, destAddr)
+	replacement, err := p.session(ctx, ps, srcAddr, destAddr, plainCipher{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -451,7 +459,7 @@ func TestPacketServerSessionConcurrentSameKey(t *testing.T) {
 	results := make(chan *session, 2)
 	for i := 0; i != 2; i++ {
 		go func() {
-			sess, err := p.session(context.Background(), ps, srcAddr, destAddr)
+			sess, err := p.session(context.Background(), ps, srcAddr, destAddr, plainCipher{})
 			if err != nil {
 				t.Error(err)
 			}

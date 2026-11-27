@@ -19,12 +19,12 @@ type PacketServer struct {
 	// ProxyPacket specifies the optional dial function for
 	// establishing the transport connection.
 	ProxyPacket func(ctx context.Context, network, address string) (net.PacketConn, error)
-	// Cipher use cipher protocol
-	Cipher string
+	// CipherName is the name of the cipher
+	CipherName string
 	// Password use password authentication
 	Password string
-	// ConnCipher is connect the cipher codec
-	ConnCipher ConnCipher
+	// Cipher encrypts the traffic
+	Cipher Cipher
 	// IsResolve resolve domain name on locally
 	IsResolve bool
 	// Resolver optionally specifies an alternate resolver to use
@@ -50,6 +50,9 @@ type sessionKey struct {
 type session struct {
 	last time.Time
 	conn net.PacketConn
+	// reply encrypts the packets sent back to the client, it follows the
+	// latest packet of the client. Guarded by connTableMut.
+	reply PacketEncrypter
 }
 
 func NewPacketServer() *PacketServer {
@@ -74,7 +77,7 @@ func (p *PacketServer) ServePacket(conn net.PacketConn) error {
 	ps := &packetServer{
 		PacketConn: conn,
 		BytesPool:  p.BytesPool,
-		Encryptor:  p.ConnCipher,
+		Encryptor:  p.Cipher,
 		Logger:     p.Logger,
 	}
 	ctx, cancel := context.WithCancel(p.context())
@@ -85,14 +88,14 @@ func (p *PacketServer) ServePacket(conn net.PacketConn) error {
 	go p.gcTask(ctx)
 	for {
 		buf := getBytes(p.BytesPool)
-		i, src, dest, err := ps.readFrom(buf[:])
+		i, src, dest, reply, err := ps.readFrom(buf[:])
 		if err != nil {
 			putBytes(p.BytesPool, buf)
 			return err
 		}
 		go func() {
 			defer putBytes(p.BytesPool, buf)
-			p.forward(ctx, ps, src, dest, buf[:i])
+			p.forward(ctx, ps, src, dest, reply, buf[:i])
 		}()
 	}
 }
@@ -147,8 +150,8 @@ func (p *PacketServer) proxyListenPacket(ctx context.Context, network, address s
 	return proxyPacket(ctx, network, address)
 }
 
-func (p *PacketServer) forward(ctx context.Context, conn *packetServer, src, dest net.Addr, buf []byte) {
-	sess, err := p.session(ctx, conn, src, dest)
+func (p *PacketServer) forward(ctx context.Context, conn *packetServer, src, dest net.Addr, reply PacketEncrypter, buf []byte) {
+	sess, err := p.session(ctx, conn, src, dest, reply)
 	if err != nil {
 		if p.Logger != nil {
 			p.Logger.Println(err)
@@ -164,13 +167,14 @@ func (p *PacketServer) forward(ctx context.Context, conn *packetServer, src, des
 
 }
 
-func (p *PacketServer) session(ctx context.Context, conn *packetServer, src, dest net.Addr) (*session, error) {
+func (p *PacketServer) session(ctx context.Context, conn *packetServer, src, dest net.Addr, reply PacketEncrypter) (*session, error) {
 	key := sessionKey{owner: conn, src: src.String(), dest: dest.String()}
 
 	p.connTableMut.Lock()
 	sess, ok := p.connTable[key]
 	if ok {
 		sess.last = time.Now()
+		sess.reply = reply
 		p.connTableMut.Unlock()
 		return sess, nil
 	}
@@ -182,8 +186,9 @@ func (p *PacketServer) session(ctx context.Context, conn *packetServer, src, des
 	}
 
 	sess = &session{
-		last: time.Now(),
-		conn: forward,
+		last:  time.Now(),
+		conn:  forward,
+		reply: reply,
 	}
 	// Re-check to avoid leaking forward when another goroutine won the race.
 	p.connTableMut.Lock()
@@ -194,6 +199,7 @@ func (p *PacketServer) session(ctx context.Context, conn *packetServer, src, des
 	}
 	if exist, ok := p.connTable[key]; ok {
 		exist.last = time.Now()
+		exist.reply = reply
 		p.connTableMut.Unlock()
 		forward.Close()
 		return exist, nil
@@ -227,7 +233,10 @@ func (p *PacketServer) session(ctx context.Context, conn *packetServer, src, des
 			if addr.String() != reply {
 				continue
 			}
-			_, err = conn.writeTo(buf[:n], dest, src)
+			p.connTableMut.Lock()
+			enc := sess.reply
+			p.connTableMut.Unlock()
+			_, err = conn.writeTo(enc, buf[:n], dest, src)
 			if err != nil {
 				if p.Logger != nil {
 					p.Logger.Println(err)
@@ -248,25 +257,39 @@ func (p *PacketServer) context() context.Context {
 
 type packetServer struct {
 	net.PacketConn
-	Encryptor ConnCipher
+	Encryptor Cipher
 	BytesPool BytesPool
 	Logger    Logger
 }
 
-func (p *packetServer) readFrom(b []byte) (n int, ori, addr net.Addr, err error) {
+// readFrom reads the next valid packet. reply encrypts the packets sent back to its sender.
+// requestDecrypter decrypts the requests a server receives and keeps the
+// encrypter for the replies to the last one.
+type requestDecrypter struct {
+	cipher Cipher
+	reply  PacketEncrypter
+}
+
+func (d *requestDecrypter) Decrypt(dist, src []byte) (n int, err error) {
+	n, d.reply, err = d.cipher.ServerPacket(dist, src)
+	return n, err
+}
+
+func (p *packetServer) readFrom(b []byte) (n int, ori, addr net.Addr, reply PacketEncrypter, err error) {
 	buf := getBytes(p.BytesPool)
 	defer putBytes(p.BytesPool, buf)
+	request := requestDecrypter{cipher: p.Encryptor}
 	for {
 		n, a, err := p.PacketConn.ReadFrom(buf)
 		if err != nil {
-			return 0, nil, nil, err
+			return 0, nil, nil, nil, err
 		}
-		n, addr, err = decryptPacket(p.Encryptor, p.BytesPool, b, buf[:n])
+		n, addr, err = decryptPacket(&request, p.BytesPool, b, buf[:n])
 		if err == nil {
-			return n, a, addr, nil
+			return n, a, addr, request.reply, nil
 		}
 		if !errors.Is(err, ErrInvalidPacket) {
-			return 0, nil, nil, err
+			return 0, nil, nil, nil, err
 		}
 		if p.Logger != nil {
 			p.Logger.Println(fmt.Errorf("from %v: %v", a, err))
@@ -274,10 +297,10 @@ func (p *packetServer) readFrom(b []byte) (n int, ori, addr net.Addr, err error)
 	}
 }
 
-func (p *packetServer) writeTo(b []byte, ori, addr net.Addr) (n int, err error) {
+func (p *packetServer) writeTo(reply PacketEncrypter, b []byte, ori, addr net.Addr) (n int, err error) {
 	buf := getBytes(p.BytesPool)
 	defer putBytes(p.BytesPool, buf)
-	n, err = encryptPacket(p.Encryptor, p.BytesPool, buf, b, ori)
+	n, err = encryptPacket(reply, p.BytesPool, buf, b, ori)
 	if err != nil {
 		return 0, err
 	}
