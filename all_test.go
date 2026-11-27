@@ -3,19 +3,25 @@ package shadowsocks_test
 import (
 	"context"
 	"crypto/cipher"
+	"crypto/rand"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/wzshiming/shadowsocks"
 	"github.com/wzshiming/shadowsocks/aead"
+	aes_x_gcm "github.com/wzshiming/shadowsocks/aead/aes-x-gcm"
 	_ "github.com/wzshiming/shadowsocks/init"
 	"github.com/wzshiming/shadowsocks/stream"
+	aes_x_cfb "github.com/wzshiming/shadowsocks/stream/aes-x-cfb"
 )
 
 var list = []string{
@@ -64,7 +70,18 @@ var list = []string{
 	"salsa20:123",
 
 	"YWVzLTEyOC1jZmI6MTIzNDU2Cg==",
+
+	"xchacha20-ietf-poly1305:123",
+	"2022-blake3-aes-128-gcm:" + key16,
+	"2022-blake3-aes-256-gcm:" + key32,
+	"2022-blake3-chacha20-poly1305:" + key32,
 }
+
+// Shadowsocks 2022 keys are base64 and so need escaping in a URL.
+var (
+	key16 = url.QueryEscape(base64.StdEncoding.EncodeToString([]byte("0123456789abcdef")))
+	key32 = url.QueryEscape(base64.StdEncoding.EncodeToString([]byte("0123456789abcdef0123456789abcdef")))
+)
 
 func TestAll(t *testing.T) {
 	svc := httptest.NewTLSServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
@@ -113,29 +130,77 @@ func TestAll(t *testing.T) {
 	}
 }
 
-func TestEncryptor(t *testing.T) {
-	var tmp1 [255]byte
-	var tmp2 [255]byte
-
-	for _, c := range shadowsocks.CipherList() {
-		t.Run(c, func(t *testing.T) {
-
-			cipher, err := shadowsocks.NewCipher(c, "pwd")
+// TestCipherList checks that every registered cipher relays a stream and
+// packets between its client and its server side.
+func TestCipherList(t *testing.T) {
+	target := &shadowsocks.Addr{Name: "example.com", Port: 443}
+	for _, method := range shadowsocks.CipherList() {
+		t.Run(method, func(t *testing.T) {
+			pwd := "pwd"
+			if strings.HasPrefix(method, "2022-") {
+				pwd = base64.StdEncoding.EncodeToString(make([]byte, 16))
+				if _, err := shadowsocks.NewCipher(method, pwd); err != nil {
+					pwd = base64.StdEncoding.EncodeToString(make([]byte, 32))
+				}
+			}
+			cipher, err := shadowsocks.NewCipher(method, pwd)
 			if err != nil {
 				t.Fatal(err)
 			}
 
-			n1, err := cipher.Encrypt(tmp1[:], []byte(c))
+			a, b := net.Pipe()
+			defer a.Close()
+			defer b.Close()
+			go func() {
+				conn, err := cipher.ClientConn(a, target)
+				if err != nil {
+					t.Error(err)
+					return
+				}
+				conn.Write([]byte(method))
+				buf := make([]byte, len(method))
+				if _, err := io.ReadFull(conn, buf); err != nil || string(buf) != method {
+					t.Errorf("client read %q, %v", buf, err)
+				}
+				a.Close()
+			}()
+			conn, addr, err := cipher.ServerConn(b)
 			if err != nil {
 				t.Fatal(err)
 			}
+			if addr.String() != target.String() {
+				t.Fatalf("target = %v, want %v", addr, target)
+			}
+			// Echo until the client is satisfied and closes.
+			io.Copy(conn, conn)
 
-			n2, err := cipher.Decrypt(tmp2[:], tmp1[:n1])
+			// A packet to the server and the response to it.
+			var wire, plain [255]byte
+			client, err := cipher.ClientPacket()
 			if err != nil {
 				t.Fatal(err)
 			}
-			if string(tmp2[:n2]) != c {
-				t.Errorf("%q %q %q", c, tmp1[:n1], tmp2[:n2])
+			n, err := client.Encrypt(wire[:], []byte(method))
+			if err != nil {
+				t.Fatal(err)
+			}
+			n, reply, err := cipher.ServerPacket(plain[:], wire[:n])
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(plain[:n]) != method {
+				t.Errorf("server got %q", plain[:n])
+			}
+			n, err = reply.Encrypt(wire[:], []byte("re "+method))
+			if err != nil {
+				t.Fatal(err)
+			}
+			n, err = client.Decrypt(plain[:], wire[:n])
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(plain[:n]) != "re "+method {
+				t.Errorf("client got %q", plain[:n])
 			}
 		})
 	}
@@ -202,7 +267,7 @@ func TestPacket(t *testing.T) {
 }
 
 // startPacketEcho runs an echo peer behind a packet server and returns a client through it.
-func startPacketEcho(t *testing.T, method string) (echo net.PacketConn, remote *shadowsocks.SimplePacketServer, client net.PacketConn) {
+func startPacketEcho(t *testing.T, userinfo string) (echo net.PacketConn, remote *shadowsocks.SimplePacketServer, client net.PacketConn) {
 	t.Helper()
 	echo, err := net.ListenPacket("udp", "127.0.0.1:0")
 	if err != nil {
@@ -220,7 +285,7 @@ func startPacketEcho(t *testing.T, method string) (echo net.PacketConn, remote *
 		}
 	}()
 
-	remote, err = shadowsocks.NewSimplePacketServer("ss://" + method + ":123@127.0.0.1:0")
+	remote, err = shadowsocks.NewSimplePacketServer("ss://" + userinfo + "@127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -242,7 +307,13 @@ func startPacketEcho(t *testing.T, method string) (echo net.PacketConn, remote *
 }
 
 func TestPacketDiscardInvalid(t *testing.T) {
-	echo, remote, client := startPacketEcho(t, "aes-128-gcm")
+	for _, method := range []string{"aes-128-gcm:123", "2022-blake3-aes-256-gcm:" + key32, "2022-blake3-chacha20-poly1305:" + key32} {
+		t.Run(method, func(t *testing.T) { testPacketDiscardInvalid(t, method) })
+	}
+}
+
+func testPacketDiscardInvalid(t *testing.T, method string) {
+	echo, remote, client := startPacketEcho(t, method)
 
 	junk := [][]byte{nil, {1, 2, 3}, make([]byte, 64)}
 	targets := []struct {
@@ -279,7 +350,7 @@ func TestPacketDiscardInvalid(t *testing.T) {
 }
 
 func TestPacketReadFromSmallBuffer(t *testing.T) {
-	for _, method := range []string{"aes-128-gcm", "aes-128-cfb"} {
+	for _, method := range []string{"aes-128-gcm:123", "aes-128-cfb:123", "2022-blake3-aes-128-gcm:" + key16, "2022-blake3-chacha20-poly1305:" + key32} {
 		t.Run(method, func(t *testing.T) {
 			echo, _, client := startPacketEcho(t, method)
 			client.SetReadDeadline(time.Now().Add(5 * time.Second))
@@ -308,14 +379,8 @@ func TestPacketReadFromSmallBuffer(t *testing.T) {
 
 func TestDecryptInvalidPacket(t *testing.T) {
 	errCipher := errors.New("cipher unavailable")
-	gcm, err := shadowsocks.NewCipher("aes-128-gcm", "123")
-	if err != nil {
-		t.Fatal(err)
-	}
-	cfb, err := shadowsocks.NewCipher("aes-128-cfb", "123")
-	if err != nil {
-		t.Fatal(err)
-	}
+	gcm := &aead.Cipher{Rand: rand.Reader, Key: make([]byte, 16), NewAEAD: aes_x_gcm.NewAESGCM}
+	cfb := &stream.Cipher{Rand: rand.Reader, Key: make([]byte, 16), IvLen: 16, NewEncrypt: aes_x_cfb.NewAESCFBStreamEncrypt, NewDecrypt: aes_x_cfb.NewAESCFBStreamDecrypt}
 	var wire [64]byte
 	sealed, err := gcm.Encrypt(wire[:], []byte("data"))
 	if err != nil {
@@ -326,7 +391,7 @@ func TestDecryptInvalidPacket(t *testing.T) {
 
 	tests := []struct {
 		name   string
-		cipher shadowsocks.ConnCipher
+		cipher shadowsocks.PacketSession
 		dest   []byte
 		src    []byte
 		want   error

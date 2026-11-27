@@ -24,9 +24,9 @@ func NewSimpleServer(addr string) (*SimpleServer, error) {
 		Network: "tcp",
 		Address: cfg.Address,
 	}
-	s.Cipher = cfg.Cipher
+	s.CipherName = cfg.CipherName
 	s.Password = cfg.Password
-	s.ConnCipher = cfg.ConnCipher
+	s.Cipher = cfg.Cipher
 	return s, nil
 }
 
@@ -71,7 +71,7 @@ func (s *SimpleServer) Close() error {
 func (s *SimpleServer) ProxyURL() string {
 	u := url.URL{
 		Scheme: "ss",
-		User:   url.UserPassword(s.Cipher, s.Password),
+		User:   url.UserPassword(s.CipherName, s.Password),
 		Host:   s.Address,
 	}
 	return u.String()

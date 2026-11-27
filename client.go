@@ -3,6 +3,7 @@ package shadowsocks
 import (
 	"context"
 	"fmt"
+	"github.com/wzshiming/shadowsocks/internal/socks"
 	"net"
 	"time"
 )
@@ -16,12 +17,12 @@ type Dialer struct {
 	// ProxyDial specifies the optional dial function for
 	// establishing the transport connection.
 	ProxyDial func(context.Context, string, string) (net.Conn, error)
-	// Cipher use cipher protocol
-	Cipher string
+	// CipherName is the name of the cipher
+	CipherName string
 	// Password use password authentication
 	Password string
-	// ConnCipher is connect the cipher codec
-	ConnCipher ConnCipher
+	// Cipher encrypts the traffic
+	Cipher Cipher
 	// IsResolve resolve domain name on locally
 	IsResolve bool
 	// Resolver optionally specifies an alternate resolver to use
@@ -41,9 +42,9 @@ func NewDialer(addr string) (*Dialer, error) {
 	return &Dialer{
 		ProxyNetwork: "tcp",
 		ProxyAddress: cfg.Address,
-		Cipher:       cfg.Cipher,
+		CipherName:   cfg.CipherName,
 		Password:     cfg.Password,
-		ConnCipher:   cfg.ConnCipher,
+		Cipher:       cfg.Cipher,
 		Timeout:      time.Minute,
 	}, nil
 }
@@ -82,7 +83,7 @@ func (d *Dialer) connect(ctx context.Context, address string) (net.Conn, error) 
 		}
 	}
 
-	addr, err := parseAddress(address)
+	addr, err := socks.ParseAddr(address)
 	if err != nil {
 		return nil, err
 	}
@@ -105,14 +106,12 @@ func (d *Dialer) connect(ctx context.Context, address string) (net.Conn, error) 
 		defer conn.SetDeadline(time.Time{})
 	}
 
-	conn = d.ConnCipher.StreamConn(conn)
-
-	err = writeAddress(conn, addr)
+	stream, err := d.Cipher.ClientConn(conn, addr)
 	if err != nil {
 		conn.Close()
 		return nil, err
 	}
-	return conn, nil
+	return stream, nil
 }
 
 func (d *Dialer) resolver() *net.Resolver {

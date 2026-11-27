@@ -25,9 +25,9 @@ func NewSimplePacketServer(addr string) (*SimplePacketServer, error) {
 		Network:      "udp",
 		Address:      cfg.Address,
 	}
-	s.Cipher = cfg.Cipher
+	s.CipherName = cfg.CipherName
 	s.Password = cfg.Password
-	s.ConnCipher = cfg.ConnCipher
+	s.Cipher = cfg.Cipher
 	return s, nil
 }
 
@@ -72,7 +72,7 @@ func (s *SimplePacketServer) Close() error {
 func (s *SimplePacketServer) ProxyURL() string {
 	u := url.URL{
 		Scheme: "ss",
-		User:   url.UserPassword(s.Cipher, s.Password),
+		User:   url.UserPassword(s.CipherName, s.Password),
 		Host:   s.Address,
 	}
 	return u.String()

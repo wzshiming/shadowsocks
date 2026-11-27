@@ -116,9 +116,9 @@ func GetCipherAndPasswordFromUserinfo(user *url.Userinfo) (cipher, password stri
 
 type proxyConfig struct {
 	Address    string
-	Cipher     string
+	CipherName string
 	Password   string
-	ConnCipher ConnCipher
+	Cipher     Cipher
 }
 
 // parseProxyURL parses an ss:// URL into address, cipher and password.
@@ -138,16 +138,16 @@ func parseProxyURL(addr string) (*proxyConfig, error) {
 	}
 	var cfg proxyConfig
 	if u.User != nil {
-		cfg.Cipher, cfg.Password, err = GetCipherAndPasswordFromUserinfo(u.User)
+		cfg.CipherName, cfg.Password, err = GetCipherAndPasswordFromUserinfo(u.User)
 		if err != nil {
 			return nil, err
 		}
 	}
-	connCipher, err := NewCipher(cfg.Cipher, cfg.Password)
+	connCipher, err := NewCipher(cfg.CipherName, cfg.Password)
 	if err != nil {
 		return nil, err
 	}
-	cfg.ConnCipher = connCipher
+	cfg.Cipher = connCipher
 	cfg.Address = host
 	return &cfg, nil
 }

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/wzshiming/shadowsocks/internal/socks"
 	"net"
 )
 
@@ -11,7 +12,7 @@ type ListenPacket interface {
 	ListenPacket(ctx context.Context, network, address string) (net.PacketConn, error)
 }
 
-func decryptPacket(c ConnCipher, p BytesPool, dist, src []byte) (n int, addr net.Addr, err error) {
+func decryptPacket(c PacketDecrypter, p BytesPool, dist, src []byte) (n int, addr net.Addr, err error) {
 	plain := getBytes(p)
 	defer putBytes(p, plain)
 	i, err := c.Decrypt(plain, src)
@@ -19,7 +20,7 @@ func decryptPacket(c ConnCipher, p BytesPool, dist, src []byte) (n int, addr net
 		return 0, nil, err
 	}
 	buf := bytes.NewBuffer(plain[:i])
-	a, err := readAddress(buf)
+	a, err := socks.ReadAddr(buf)
 	if err == nil {
 		addr, err = toUDPAddr(a)
 	}
@@ -29,20 +30,19 @@ func decryptPacket(c ConnCipher, p BytesPool, dist, src []byte) (n int, addr net
 	return copy(dist, buf.Bytes()), addr, nil
 }
 
-func encryptPacket(c ConnCipher, p BytesPool, dist, src []byte, addr net.Addr) (n int, err error) {
-	a, err := parseAddress(addr.String())
+func encryptPacket(c PacketEncrypter, p BytesPool, dist, src []byte, addr net.Addr) (n int, err error) {
+	a, err := socks.ParseAddr(addr.String())
 	if err != nil {
 		return 0, err
 	}
 	buf := getBytes(p)
 	defer putBytes(p, buf)
-	b := bytes.NewBuffer(buf[:0])
-	err = writeAddress(b, a)
+	plain, err := socks.AppendAddr(buf[:0], a)
 	if err != nil {
 		return 0, err
 	}
-	b.Write(src)
-	i, err := c.Encrypt(dist, b.Bytes())
+	plain = append(plain, src...)
+	i, err := c.Encrypt(dist, plain)
 	if err != nil {
 		return 0, err
 	}
@@ -53,20 +53,13 @@ func toUDPAddr(addr net.Addr) (net.Addr, error) {
 	switch a := addr.(type) {
 	case *net.UDPAddr:
 		return addr, nil
-	case *address:
+	case *Addr:
 		if a.IP == nil {
 			// FQDN address, needs resolving.
 			return net.ResolveUDPAddr("udp", a.Address())
 		}
-		return &net.UDPAddr{
-			IP:   a.IP,
-			Port: a.Port,
-		}, nil
+		return &net.UDPAddr{IP: a.IP, Port: a.Port}, nil
 	default:
-		a, err := net.ResolveUDPAddr("udp", addr.String())
-		if err != nil {
-			return nil, err
-		}
-		return a, nil
+		return net.ResolveUDPAddr("udp", addr.String())
 	}
 }

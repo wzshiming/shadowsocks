@@ -10,14 +10,16 @@ import (
 	"net"
 
 	"github.com/wzshiming/shadowsocks"
+	"github.com/wzshiming/shadowsocks/internal/kdf"
+	"github.com/wzshiming/shadowsocks/internal/socks"
 	"golang.org/x/crypto/hkdf"
 )
 
 var _zerononce [128]byte // read-only. 128 bytes is more than enough.
 
 func RegisterCipher(method string, keyLen int, cipher func(key []byte) (cipher.AEAD, error)) {
-	shadowsocks.RegisterCipher(method, func(password string) (shadowsocks.ConnCipher, error) {
-		return &Cipher{Rand: rand.Reader, Key: shadowsocks.KDF(password, keyLen), NewAEAD: cipher}, nil
+	shadowsocks.RegisterCipher(method, func(password string) (shadowsocks.Cipher, error) {
+		return &Cipher{Rand: rand.Reader, Key: kdf.KDF(password, keyLen), NewAEAD: cipher}, nil
 	})
 }
 
@@ -32,8 +34,36 @@ type Cipher struct {
 	NewAEAD func(key []byte) (cipher.AEAD, error)
 }
 
-func (c *Cipher) StreamConn(conn net.Conn) net.Conn {
-	return &cipherConn{Conn: conn, cipher: c}
+func (c *Cipher) ClientConn(conn net.Conn, target *shadowsocks.Addr) (net.Conn, error) {
+	addr, err := socks.AppendAddr(nil, target)
+	if err != nil {
+		return nil, err
+	}
+	conn = &cipherConn{Conn: conn, cipher: c}
+	if _, err := conn.Write(addr); err != nil {
+		return nil, err
+	}
+	return conn, nil
+}
+
+func (c *Cipher) ServerConn(conn net.Conn) (net.Conn, *shadowsocks.Addr, error) {
+	conn = &cipherConn{Conn: conn, cipher: c}
+	target, err := socks.ReadAddr(conn)
+	if err != nil {
+		return nil, nil, err
+	}
+	return conn, target, nil
+}
+
+// ClientPacket returns the cipher itself: packets are independent of each
+// other and requests and responses use the same format.
+func (c *Cipher) ClientPacket() (shadowsocks.PacketSession, error) {
+	return c, nil
+}
+
+func (c *Cipher) ServerPacket(dest, src []byte) (int, shadowsocks.PacketEncrypter, error) {
+	n, err := c.Decrypt(dest, src)
+	return n, c, err
 }
 
 func (c *Cipher) KeySize() int {

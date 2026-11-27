@@ -18,7 +18,7 @@ var password string
 func init() {
 	flag.StringVar(&address, "a", ":8379", "listen on the address")
 	flag.StringVar(&cipher, "c", "chacha20-ietf-poly1305", fmt.Sprintf("cipher (%s)", strings.Join(shadowsocks.CipherList(), ", ")))
-	flag.StringVar(&password, "p", "password", "your password")
+	flag.StringVar(&password, "p", "password", "your password, a base64 encoded key for the 2022-* ciphers")
 	flag.Parse()
 }
 
@@ -32,8 +32,8 @@ func main() {
 
 	go func() {
 		svc := &shadowsocks.Server{
-			Logger:     logger,
-			ConnCipher: connCipher,
+			Logger: logger,
+			Cipher: connCipher,
 		}
 
 		err := svc.ListenAndServe("tcp", address)
@@ -44,8 +44,8 @@ func main() {
 	}()
 	go func() {
 		svc := &shadowsocks.PacketServer{
-			Logger:     logger,
-			ConnCipher: connCipher,
+			Logger: logger,
+			Cipher: connCipher,
 		}
 
 		err := svc.ListenAndServe("udp", address)
