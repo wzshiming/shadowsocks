@@ -147,17 +147,19 @@ func TestPacket(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { p.Close() })
 	go func() {
 		var buf [1024 * 32]byte
 		for {
 			i, addr, err := p.ReadFrom(buf[:])
 			if err != nil {
-				t.Fatal(err)
+				// The listener is closed when the test ends.
+				return
 			}
 			tmp := append([]byte("echo "), buf[:i]...)
 			_, err = p.WriteTo(tmp, addr)
 			if err != nil {
-				t.Fatal(err)
+				return
 			}
 		}
 	}()
