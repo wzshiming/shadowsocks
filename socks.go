@@ -28,7 +28,7 @@ type address struct {
 	Port int
 }
 
-func (a *address) Network() string { return "socks5" }
+func (a *address) Network() string { return "shadowsocks" }
 
 func (a *address) String() string {
 	if a == nil {
